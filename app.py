@@ -330,6 +330,9 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 st.success(f"✅ Usuario '{new_user}' creado correctamente")
                 st.rerun()
 
+            except Exception:
+                st.error("El usuario ya existe o hubo un error")
+
             except Exception as e:
                 st.error("El usuario ya existe o hubo un error")
 elif menu == "📊 Reportes" and ROL == "admin":
