@@ -44,14 +44,16 @@ DB_URL = "postgresql+psycopg2://postgres:Meridda2026@db.ytsfrsogreiebxrquuaf.sup
 
 engine = create_engine(
     DB_URL,
-    connect_args={"sslmode": "require"},
+    connect_args={
+        "sslmode": "require"
+    },
     pool_pre_ping=True
 )
-
-# 👇 AQUÍ VA EL TEST (ARRIBA DE TODO EL RESTO)
-with engine.connect() as conn:
-    st.write(conn.execute(text("SELECT 1")).fetchone())
-
+try:
+    with engine.connect() as conn:
+        st.success(conn.execute(text("SELECT 1")).fetchone())
+except Exception as e:
+    st.error(e)
 # =========================
 # 🧱 CREAR TABLAS (AUTO)
 # =========================
