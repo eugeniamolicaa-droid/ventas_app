@@ -321,25 +321,34 @@ elif menu == "📊 Reportes" and ROL == "admin":
     # Filtros
     col1, col2, col3 = st.columns(3)
     with col1:
-        fecha_desde = st.date_input("Desde", value=date.today())
+        fecha_desde = st.date_input("Desde", value=date(2025, 1, 1))   # Fecha amplia por defecto
     with col2:
         fecha_hasta = st.date_input("Hasta", value=date.today())
     with col3:
         try:
-            vendedores = ["Todos"] + pd.read_sql("SELECT DISTINCT usuario FROM ventas", engine)['usuario'].tolist()
+            vendedores = ["Todos"] + pd.read_sql("SELECT DISTINCT usuario FROM ventas ORDER BY usuario", engine)['usuario'].tolist()
         except:
             vendedores = ["Todos"]
         vendedor_filtro = st.selectbox("Vendedor", vendedores)
 
-    # Consulta segura
+    # Consulta
     query = """
-        SELECT v.id, v.fecha, v.usuario, p.nombre as producto, 
-               v.cantidad, v.total, v.ganancia
-        FROM ventas v 
-        LEFT JOIN productos p ON v.producto_id = p.id 
-        WHERE DATE(v.fecha) BETWEEN :desde AND :hasta
+        SELECT 
+            v.id,
+            v.fecha,
+            v.usuario,
+            p.nombre as producto,
+            v.cantidad,
+            v.total,
+            v.ganancia
+        FROM ventas v
+        LEFT JOIN productos p ON v.producto_id = p.id
+        WHERE v.fecha >= :desde AND v.fecha <= :hasta
     """
-    params = {"desde": fecha_desde, "hasta": fecha_hasta}
+    params = {
+        "desde": f"{fecha_desde} 00:00:00",
+        "hasta": f"{fecha_hasta} 23:59:59"
+    }
 
     if vendedor_filtro != "Todos":
         query += " AND v.usuario = :vendedor"
@@ -347,18 +356,22 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
     try:
         ventas = pd.read_sql(query + " ORDER BY v.fecha DESC", engine, params=params)
-    except:
+    except Exception as e:
+        st.error(f"Error al cargar reportes: {e}")
         ventas = pd.DataFrame()
 
-    # Métricas
-    if not ventas.empty:
+    if ventas.empty:
+        st.warning("No se encontraron ventas con los filtros aplicados.")
+        st.info("Prueba ampliando el rango de fechas (Desde: 2025-01-01)")
+    else:
+        # Métricas
         c1, c2, c3, c4 = st.columns(4)
         with c1: st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
         with c2: st.metric("Ganancia Estimada", f"${ventas['ganancia'].sum():,.0f}")
-        with c3: st.metric("N° de Ventas", len(ventas))
+        with c3: st.metric("Número de Ventas", len(ventas))
         with c4: st.metric("Unidades Vendidas", int(ventas['cantidad'].sum()))
 
-        st.subheader("Historial Completo de Ventas")
+        st.subheader("Historial de Ventas")
         
         for _, row in ventas.iterrows():
             col1, col2, col3, col4, col5 = st.columns([2, 2.5, 1.8, 1, 1])
@@ -369,16 +382,14 @@ elif menu == "📊 Reportes" and ROL == "admin":
             with col3:
                 st.write(f"{row['cantidad']} uds - ${row['total']:,.0f}")
             with col4:
-                if st.button("✏️ Modificar", key=f"mod_{row['id']}"):
+                if st.button("✏️ Modificar", key=f"modv_{row['id']}"):
                     st.session_state["edit_venta_id"] = row["id"]
                     st.rerun()
             with col5:
-                if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
+                if st.button("🗑️ Eliminar", key=f"delv_{row['id']}"):
                     st.session_state["confirm_delete_venta"] = row["id"]
                     st.rerun()
             st.divider()
-    else:
-        st.info("No hay ventas registradas en el rango seleccionado.")
 
     # Modificar Venta
     if "edit_venta_id" in st.session_state:
@@ -401,7 +412,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
     # Eliminar Venta
     if "confirm_delete_venta" in st.session_state:
         vid = st.session_state["confirm_delete_venta"]
-        st.warning("¿Estás seguro de eliminar esta venta? El stock será devuelto automáticamente.")
+        st.warning("¿Eliminar esta venta? El stock será devuelto automáticamente.")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Sí, Eliminar", type="primary"):
