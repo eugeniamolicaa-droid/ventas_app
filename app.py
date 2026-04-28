@@ -321,7 +321,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
     # Filtros
     col1, col2, col3 = st.columns(3)
     with col1:
-        fecha_desde = st.date_input("Desde", value=date(2025, 1, 1))   # Fecha amplia por defecto
+        fecha_desde = st.date_input("Desde", value=date(2025, 1, 1))
     with col2:
         fecha_hasta = st.date_input("Hasta", value=date.today())
     with col3:
@@ -331,7 +331,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
             vendedores = ["Todos"]
         vendedor_filtro = st.selectbox("Vendedor", vendedores)
 
-    # Consulta
+    # Consulta SIMPLE y SEGURA
     query = """
         SELECT 
             v.id,
@@ -354,17 +354,12 @@ elif menu == "📊 Reportes" and ROL == "admin":
         query += " AND v.usuario = :vendedor"
         params["vendedor"] = vendedor_filtro
 
-    try:
-        ventas = pd.read_sql(query + " ORDER BY v.fecha DESC", engine, params=params)
-    except Exception as e:
-        st.error(f"Error al cargar reportes: {e}")
-        ventas = pd.DataFrame()
+    ventas = pd.read_sql(query + " ORDER BY v.fecha DESC", engine, params=params)
 
     if ventas.empty:
-        st.warning("No se encontraron ventas con los filtros aplicados.")
-        st.info("Prueba ampliando el rango de fechas (Desde: 2025-01-01)")
+        st.warning("No se encontraron ventas en el rango seleccionado.")
+        st.info("Consejo: Asegúrate de haber cobrado la venta correctamente y prueba con 'Desde: 2025-01-01'")
     else:
-        # Métricas
         c1, c2, c3, c4 = st.columns(4)
         with c1: st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
         with c2: st.metric("Ganancia Estimada", f"${ventas['ganancia'].sum():,.0f}")
