@@ -313,7 +313,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 st.warning("Completa todos los campos")
 
 # =========================
-# 📊 REPORTES - SOLO ADMIN (Versión Final)
+# 📊 REPORTES - SOLO ADMIN (VERSIÓN ESTABLE)
 # =========================
 elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes y Gestión de Ventas")
@@ -329,100 +329,107 @@ elif menu == "📊 Reportes" and ROL == "admin":
             vendedores = ["Todos"] + pd.read_sql("SELECT DISTINCT usuario FROM ventas ORDER BY usuario", engine)['usuario'].tolist()
         except:
             vendedores = ["Todos"]
-        vendedor_filtro = st.selectbox("Filtrar por Vendedor", vendedores)
+        vendedor_filtro = st.selectbox("Vendedor", vendedores)
 
-    # Consulta con filtros
-    query = """
-        SELECT 
-            v.id,
-            v.fecha,
-            v.usuario,
-            p.nombre as producto,
-            v.cantidad,
-            v.total,
-            v.ganancia
-        FROM ventas v
-        LEFT JOIN productos p ON v.producto_id = p.id
-        WHERE v.fecha >= :desde AND v.fecha <= :hasta
-    """
-    params = {
-        "desde": f"{fecha_desde} 00:00:00",
-        "hasta": f"{fecha_hasta} 23:59:59"
-    }
+    # Consulta SQL más segura
+    if vendedor_filtro == "Todos":
+        sql = """
+            SELECT 
+                v.id, 
+                v.fecha, 
+                v.usuario, 
+                p.nombre as producto,
+                v.cantidad, 
+                v.total, 
+                v.ganancia
+            FROM ventas v
+            LEFT JOIN productos p ON v.producto_id = p.id
+            WHERE v.fecha >= :desde AND v.fecha <= :hasta
+            ORDER BY v.fecha DESC
+        """
+        params = {"desde": f"{fecha_desde} 00:00:00", "hasta": f"{fecha_hasta} 23:59:59"}
+    else:
+        sql = """
+            SELECT 
+                v.id, 
+                v.fecha, 
+                v.usuario, 
+                p.nombre as producto,
+                v.cantidad, 
+                v.total, 
+                v.ganancia
+            FROM ventas v
+            LEFT JOIN productos p ON v.producto_id = p.id
+            WHERE v.fecha >= :desde 
+              AND v.fecha <= :hasta 
+              AND v.usuario = :vendedor
+            ORDER BY v.fecha DESC
+        """
+        params = {
+            "desde": f"{fecha_desde} 00:00:00", 
+            "hasta": f"{fecha_hasta} 23:59:59",
+            "vendedor": vendedor_filtro
+        }
 
-    if vendedor_filtro != "Todos":
-        query += " AND v.usuario = :vendedor"
-        params["vendedor"] = vendedor_filtro
-
-    ventas = pd.read_sql(query + " ORDER BY v.fecha DESC", engine, params=params)
+    try:
+        ventas = pd.read_sql(sql, engine, params=params)
+    except Exception as e:
+        st.error(f"Error al cargar reportes: {str(e)}")
+        ventas = pd.DataFrame()
 
     if ventas.empty:
-        st.warning("No se encontraron ventas con los filtros seleccionados.")
+        st.warning("No se encontraron ventas con los filtros actuales.")
+        st.info("Prueba cambiando el rango de fechas o selecciona 'Todos'.")
     else:
         # Métricas
         c1, c2, c3, c4 = st.columns(4)
         with c1: st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
         with c2: st.metric("Ganancia Estimada", f"${ventas['ganancia'].sum():,.0f}")
         with c3: st.metric("Ventas", len(ventas))
-        with c4: st.metric("Unidades", int(ventas['cantidad'].sum()))
+        with c4: st.metric("Unidades Vendidas", int(ventas['cantidad'].sum()))
 
-        st.subheader("Lista de Ventas")
+        st.subheader("Historial de Ventas")
         
         for _, row in ventas.iterrows():
-            with st.container():
-                col1, col2, col3, col4, col5 = st.columns([2, 2.5, 1.8, 1.1, 1.1])
-                with col1:
-                    st.write(f"**{row['fecha'].strftime('%d/%m %H:%M')}**")
-                with col2:
-                    st.write(f"{row['usuario']} → **{row['producto']}**")
-                with col3:
-                    st.write(f"{row['cantidad']} uds - ${row['total']:,.0f}")
-                with col4:
-                    if st.button("✏️ Modificar", key=f"mod_{row['id']}"):
-                        st.session_state["edit_venta_id"] = row["id"]
-                        st.rerun()
-                with col5:
-                    if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
-                        st.session_state["confirm_delete_venta"] = row["id"]
-                        st.rerun()
-                st.divider()
+            col1, col2, col3, col4, col5 = st.columns([2, 2.5, 1.8, 1, 1])
+            with col1:
+                st.write(f"**{row['fecha'].strftime('%d/%m %H:%M')}**")
+            with col2:
+                st.write(f"{row['usuario']} → **{row['producto']}**")
+            with col3:
+                st.write(f"{row['cantidad']} uds - ${row['total']:,.0f}")
+            with col4:
+                if st.button("✏️ Modificar", key=f"mod_{row['id']}"):
+                    st.session_state["edit_venta_id"] = row["id"]
+                    st.rerun()
+            with col5:
+                if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
+                    st.session_state["confirm_delete_venta"] = row["id"]
+                    st.rerun()
+            st.divider()
 
     # ====================== MODIFICAR VENTA ======================
     if "edit_venta_id" in st.session_state:
         vid = st.session_state["edit_venta_id"]
         venta = pd.read_sql(f"SELECT * FROM ventas WHERE id = {vid}", engine).iloc[0]
-        
         st.subheader(f"Modificar Venta #{vid}")
-        nueva_cantidad = st.number_input("Nueva Cantidad", min_value=1, value=int(venta["cantidad"]))
-        
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("💾 Guardar Cambios", type="primary"):
-                diferencia = nueva_cantidad - venta["cantidad"]
-                nuevo_total = (venta["total"] / venta["cantidad"]) * nueva_cantidad
-                
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        UPDATE ventas 
-                        SET cantidad = :cant, total = :total, ganancia = :total * 0.3 
-                        WHERE id = :id
-                    """), {"cant": nueva_cantidad, "total": nuevo_total, "id": vid})
-                    
-                    conn.execute(text("UPDATE productos SET stock = stock - :diff WHERE id = :pid"),
-                               {"diff": diferencia, "pid": venta["producto_id"]})
-                
-                del st.session_state["edit_venta_id"]
-                st.success("Venta modificada correctamente")
-                st.rerun()
-        with col_b:
-            if st.button("Cancelar"):
-                del st.session_state["edit_venta_id"]
-                st.rerun()
+        nueva_cant = st.number_input("Nueva Cantidad", min_value=1, value=int(venta["cantidad"]))
+        if st.button("💾 Guardar Cambios", type="primary"):
+            diff = nueva_cant - venta["cantidad"]
+            new_total = (venta["total"] / venta["cantidad"]) * nueva_cant
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE ventas SET cantidad=:c, total=:t, ganancia=:t*0.3 WHERE id=:id"),
+                           {"c": nueva_cant, "t": new_total, "id": vid})
+                conn.execute(text("UPDATE productos SET stock = stock - :d WHERE id = :pid"),
+                           {"d": diff, "pid": venta["producto_id"]})
+            del st.session_state["edit_venta_id"]
+            st.success("Venta modificada correctamente")
+            st.rerun()
 
     # ====================== ELIMINAR VENTA ======================
     if "confirm_delete_venta" in st.session_state:
         vid = st.session_state["confirm_delete_venta"]
-        st.warning("¿Estás seguro de eliminar esta venta? El stock será devuelto automáticamente.")
+        st.warning("¿Eliminar esta venta? El stock será devuelto automáticamente.")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Sí, Eliminar", type="primary"):
@@ -433,7 +440,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                         conn.execute(text("UPDATE productos SET stock = stock + :q WHERE id = :pid"),
                                    {"q": v[1], "pid": v[0]})
                         conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": vid})
-                st.success("Venta eliminada correctamente")
+                st.success("Venta eliminada y stock devuelto")
                 del st.session_state["confirm_delete_venta"]
                 st.rerun()
         with col2:
