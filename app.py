@@ -117,6 +117,11 @@ def require_admin():
         st.stop()
 
 
+def reset_pagos():
+    st.session_state["pago_efectivo"] = 0.0
+    st.session_state["pago_transferencia"] = 0.0
+
+
 def crear_pdf_fin_dia(resumen, ventas_detalle):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
@@ -254,9 +259,7 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen TEXT;"))
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS costo FLOAT DEFAULT 0;"))
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS stock INT DEFAULT 0;"))
-
     conn.execute(text("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS venta_grupo TEXT;"))
-
     conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS subtotal FLOAT DEFAULT 0;"))
     conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS descuento_tipo TEXT DEFAULT 'Sin descuento';"))
     conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS descuento_monto FLOAT DEFAULT 0;"))
@@ -315,6 +318,8 @@ if "login" not in st.session_state:
                 if "descuento_tipo" not in st.session_state:
                     st.session_state["descuento_tipo"] = None
 
+                reset_pagos()
+
                 st.rerun()
             else:
                 st.error("❌ Credenciales incorrectas")
@@ -330,6 +335,12 @@ if "cart" not in st.session_state:
 
 if "descuento_tipo" not in st.session_state:
     st.session_state["descuento_tipo"] = None
+
+if "pago_efectivo" not in st.session_state:
+    st.session_state["pago_efectivo"] = 0.0
+
+if "pago_transferencia" not in st.session_state:
+    st.session_state["pago_transferencia"] = 0.0
 
 
 # =========================
@@ -360,7 +371,7 @@ with st.sidebar:
 # DATA
 # =========================
 df_productos = pd.read_sql(
-    "SELECT * FROM productos ORDER BY nombre",
+    "SELECT * FROM productos ORDER BY nombre, variante",
     engine
 )
 
@@ -426,6 +437,7 @@ if menu == "🛒 Agregar Producto":
                             "qty": int(qty)
                         })
 
+                        reset_pagos()
                         st.toast(f"✅ {row['nombre']} agregado", icon="🛒")
                         st.rerun()
 
@@ -441,6 +453,7 @@ elif menu == "🛍️ Carrito":
     if not cart:
         st.info("El carrito está vacío")
         st.session_state["descuento_tipo"] = None
+        reset_pagos()
 
     else:
         subtotal = sum(item["price"] * item["qty"] for item in cart)
@@ -457,6 +470,7 @@ elif menu == "🛍️ Carrito":
             with col3:
                 if st.button("🗑️", key=f"rm_cart_{i}"):
                     cart.pop(i)
+                    reset_pagos()
                     st.rerun()
 
         st.divider()
@@ -468,12 +482,14 @@ elif menu == "🛍️ Carrito":
         with col_desc1:
             if st.button("🎁 BONIFICACIÓN 10%", use_container_width=True, key="desc_bonificacion"):
                 st.session_state["descuento_tipo"] = "bonificacion"
+                reset_pagos()
                 st.rerun()
 
         with col_desc2:
             if ROL == "admin":
                 if st.button("👥 EMPLEADOS 20%", use_container_width=True, key="desc_empleados"):
                     st.session_state["descuento_tipo"] = "empleados"
+                    reset_pagos()
                     st.rerun()
             else:
                 st.button(
@@ -487,6 +503,7 @@ elif menu == "🛍️ Carrito":
         with col_desc3:
             if st.button("❌ Quitar descuento", use_container_width=True, key="quitar_descuento"):
                 st.session_state["descuento_tipo"] = None
+                reset_pagos()
                 st.rerun()
 
         descuento_tipo = st.session_state.get("descuento_tipo")
@@ -503,6 +520,7 @@ elif menu == "🛍️ Carrito":
 
         descuento_monto = subtotal * descuento_porcentaje
         total = subtotal - descuento_monto
+        total = max(0.0, float(total))
 
         col_total1, col_total2, col_total3 = st.columns(3)
 
@@ -517,6 +535,17 @@ elif menu == "🛍️ Carrito":
 
         st.markdown("### 💳 Forma de pago")
 
+        st.session_state["pago_efectivo"] = float(st.session_state.get("pago_efectivo", 0.0))
+        st.session_state["pago_transferencia"] = float(st.session_state.get("pago_transferencia", 0.0))
+
+        if st.session_state["pago_efectivo"] > total:
+            st.session_state["pago_efectivo"] = total
+
+        restante_para_transferencia = max(0.0, total - st.session_state["pago_efectivo"])
+
+        if st.session_state["pago_transferencia"] > restante_para_transferencia:
+            st.session_state["pago_transferencia"] = restante_para_transferencia
+
         colp1, colp2 = st.columns(2)
 
         with colp1:
@@ -524,17 +553,22 @@ elif menu == "🛍️ Carrito":
                 "💵 Efectivo",
                 min_value=0.0,
                 max_value=float(total),
-                value=float(total),
+                value=float(st.session_state["pago_efectivo"]),
                 step=100.0,
                 key="pago_efectivo"
             )
+
+        restante_para_transferencia = max(0.0, total - float(pago_efectivo))
+
+        if st.session_state["pago_transferencia"] > restante_para_transferencia:
+            st.session_state["pago_transferencia"] = restante_para_transferencia
 
         with colp2:
             pago_transferencia = st.number_input(
                 "🏦 Transferencia",
                 min_value=0.0,
-                max_value=float(total),
-                value=0.0,
+                max_value=float(restante_para_transferencia),
+                value=float(st.session_state["pago_transferencia"]),
                 step=100.0,
                 key="pago_transferencia"
             )
@@ -548,10 +582,11 @@ elif menu == "🛍️ Carrito":
                 key="comprobante_transferencia"
             )
 
-        total_pagado = pago_efectivo + pago_transferencia
+        total_pagado = float(pago_efectivo) + float(pago_transferencia)
         diferencia = total_pagado - total
 
         st.write(f"**Pagado:** ${total_pagado:,.0f}")
+        st.write(f"**Restante permitido:** ${max(0.0, total - total_pagado):,.0f}")
 
         if diferencia < 0:
             st.warning(f"Faltan pagar: ${abs(diferencia):,.0f}")
@@ -566,6 +601,7 @@ elif menu == "🛍️ Carrito":
             if st.button("🧹 Vaciar carrito", use_container_width=True, key="vaciar_carrito"):
                 st.session_state["cart"] = []
                 st.session_state["descuento_tipo"] = None
+                reset_pagos()
                 st.rerun()
 
         with colb2:
@@ -575,7 +611,7 @@ elif menu == "🛍️ Carrito":
                     st.error("❌ El pago no alcanza para cubrir el total")
 
                 elif total_pagado > total:
-                    st.error("❌ El pago no puede ser mayor al total de los productos")
+                    st.error("❌ El pago no puede ser mayor al total final con descuento aplicado")
 
                 elif pago_transferencia > 0 and comprobante_transferencia is None:
                     st.error("❌ Debes subir el comprobante de transferencia")
@@ -586,7 +622,6 @@ elif menu == "🛍️ Carrito":
                         comprobante_base64 = image_to_base64(comprobante_transferencia)
 
                         with engine.begin() as conn:
-                            # Validar stock antes de cobrar
                             for item in cart:
                                 producto = conn.execute(text("""
                                     SELECT stock, costo, precio
@@ -602,7 +637,6 @@ elif menu == "🛍️ Carrito":
                                 if stock_actual < item["qty"]:
                                     raise Exception(f"Stock insuficiente para {item['name']}")
 
-                            # Registrar cobro general
                             conn.execute(text("""
                                 INSERT INTO cobros
                                 (
@@ -641,7 +675,6 @@ elif menu == "🛍️ Carrito":
                                 "comprobante": comprobante_base64
                             })
 
-                            # Registrar productos vendidos distribuyendo el descuento proporcionalmente
                             for item in cart:
                                 conn.execute(text("""
                                     UPDATE productos
@@ -675,6 +708,7 @@ elif menu == "🛍️ Carrito":
 
                         st.session_state["cart"] = []
                         st.session_state["descuento_tipo"] = None
+                        reset_pagos()
                         st.success("✅ Venta completada exitosamente")
                         st.rerun()
 
@@ -692,75 +726,172 @@ elif menu == "⚙️ Admin" and ROL == "admin":
 
     tab1, tab2 = st.tabs(["📦 Productos", "👥 Usuarios"])
 
-    # =========================
-    # PRODUCTOS
-    # =========================
     with tab1:
-        st.subheader("Agregar Nuevo Producto")
+        st.subheader("Agregar Nuevo Producto con Variantes")
 
-        with st.form("form_nuevo_producto", clear_on_submit=True):
+        with st.form("form_nuevo_producto_variantes", clear_on_submit=True):
             col1, col2 = st.columns(2)
 
             with col1:
-                nombre = st.text_input("Nombre del Producto *", key="nuevo_nombre")
-                categoria = st.text_input("Categoría", key="nueva_categoria")
-                variante = st.text_input("Variante", key="nueva_variante")
+                categoria = st.text_input(
+                    "Categoría",
+                    placeholder="Ej: Fundas",
+                    key="nueva_categoria"
+                )
+
+                nombre = st.text_input(
+                    "Producto / Modelo *",
+                    placeholder="Ej: iPhone 17",
+                    key="nuevo_nombre"
+                )
+
+                precio = st.number_input(
+                    "Precio de Venta ($)",
+                    min_value=0.0,
+                    step=100.0,
+                    key="nuevo_precio"
+                )
 
             with col2:
-                precio = st.number_input("Precio de Venta ($)", min_value=0.0, step=100.0, key="nuevo_precio")
-                costo = st.number_input("Costo ($)", min_value=0.0, step=100.0, key="nuevo_costo")
-                stock = st.number_input("Stock Inicial", min_value=0, value=10, step=1, key="nuevo_stock")
+                costo = st.number_input(
+                    "Costo ($)",
+                    min_value=0.0,
+                    step=100.0,
+                    key="nuevo_costo"
+                )
 
-            imagen = st.file_uploader(
-                "📸 Foto del producto",
-                type=["jpg", "jpeg", "png"],
-                key="nueva_imagen"
+                imagen = st.file_uploader(
+                    "📸 Foto del producto",
+                    type=["jpg", "jpeg", "png"],
+                    key="nueva_imagen"
+                )
+
+            st.markdown("### 🎨 Variantes / Colores")
+            st.info("Escribí una variante por línea con este formato: color, stock")
+
+            variantes_texto = st.text_area(
+                "Variantes",
+                placeholder="Negro, 5\nAzul, 8\nRojo, 3\nTransparente, 10",
+                height=180,
+                key="variantes_texto"
             )
 
-            submit_producto = st.form_submit_button("Guardar Producto", type="primary")
+            submit_producto = st.form_submit_button(
+                "Guardar Producto con Variantes",
+                type="primary"
+            )
 
             if submit_producto:
-                if nombre and precio > 0:
-                    img_base64 = image_to_base64(imagen)
+                if not nombre or precio <= 0 or not variantes_texto.strip():
+                    st.error("Producto, precio y variantes son obligatorios")
 
-                    with engine.begin() as conn:
-                        conn.execute(text("""
-                            INSERT INTO productos (categoria, nombre, variante, precio, costo, stock, imagen)
-                            VALUES (:cat, :nom, :var, :pre, :cos, :sto, :img)
-                        """), {
-                            "cat": categoria,
-                            "nom": nombre,
-                            "var": variante,
-                            "pre": precio,
-                            "cos": costo,
-                            "sto": int(stock),
-                            "img": img_base64
-                        })
-
-                    st.success("✅ Producto agregado correctamente")
-                    st.rerun()
                 else:
-                    st.error("Nombre y precio son obligatorios")
+                    img_base64 = image_to_base64(imagen)
+                    variantes = []
+
+                    for linea in variantes_texto.splitlines():
+                        linea = linea.strip()
+
+                        if not linea:
+                            continue
+
+                        partes = linea.split(",")
+
+                        if len(partes) != 2:
+                            st.error(f"Formato incorrecto en: {linea}")
+                            st.stop()
+
+                        variante_nombre = partes[0].strip()
+                        variante_stock = partes[1].strip()
+
+                        try:
+                            variante_stock = int(variante_stock)
+                        except Exception:
+                            st.error(f"Stock inválido en: {linea}")
+                            st.stop()
+
+                        if variante_nombre and variante_stock >= 0:
+                            variantes.append((variante_nombre, variante_stock))
+
+                    if not variantes:
+                        st.error("No hay variantes válidas")
+                    else:
+                        with engine.begin() as conn:
+                            for variante_nombre, variante_stock in variantes:
+                                conn.execute(text("""
+                                    INSERT INTO productos
+                                    (categoria, nombre, variante, precio, costo, stock, imagen)
+                                    VALUES (:cat, :nom, :var, :pre, :cos, :sto, :img)
+                                """), {
+                                    "cat": categoria,
+                                    "nom": nombre,
+                                    "var": variante_nombre,
+                                    "pre": precio,
+                                    "cos": costo,
+                                    "sto": variante_stock,
+                                    "img": img_base64
+                                })
+
+                        stock_total = sum(v[1] for v in variantes)
+
+                        st.success(
+                            f"✅ Producto '{nombre}' agregado con {len(variantes)} variantes. "
+                            f"Stock total: {stock_total}"
+                        )
+                        st.rerun()
 
         st.divider()
         st.subheader("Productos Registrados")
 
         df_productos_admin = pd.read_sql(
-            "SELECT * FROM productos ORDER BY nombre",
+            "SELECT * FROM productos ORDER BY categoria, nombre, variante",
             engine
         )
 
         if df_productos_admin.empty:
             st.info("No hay productos registrados")
         else:
+            resumen_stock = df_productos_admin.groupby(
+                ["categoria", "nombre"],
+                dropna=False
+            ).agg(
+                stock_total=("stock", "sum"),
+                precio=("precio", "first"),
+                costo=("costo", "first"),
+                variantes=("variante", "count")
+            ).reset_index()
+
+            st.markdown("### 📦 Resumen por producto")
+
+            st.dataframe(
+                resumen_stock.rename(columns={
+                    "categoria": "Categoría",
+                    "nombre": "Producto",
+                    "stock_total": "Stock Total",
+                    "precio": "Precio",
+                    "costo": "Costo",
+                    "variantes": "Variantes"
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.markdown("### 🎨 Variantes cargadas")
+
             for _, row in df_productos_admin.iterrows():
                 col1, col2, col3, col4 = st.columns([3, 2, 1.5, 1.5])
 
                 with col1:
-                    st.write(f"**{row['nombre']}** — {row.get('variante') or ''}")
+                    st.write(
+                        f"**{row['categoria']} | {row['nombre']}** | "
+                        f"{row.get('variante') or 'Sin variante'}"
+                    )
 
                 with col2:
-                    st.write(f"${float(row['precio']):,.0f} | Stock: **{int(row['stock'] or 0)}**")
+                    st.write(
+                        f"${float(row['precio']):,.0f} | "
+                        f"Stock: **{int(row['stock'] or 0)}**"
+                    )
 
                 with col3:
                     if st.button("✏️ Editar", key=f"edit_prod_{row['id']}"):
@@ -774,7 +905,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                                 text("DELETE FROM productos WHERE id = :id"),
                                 {"id": int(row["id"])}
                             )
-                        st.success("Producto eliminado")
+                        st.success("Variante eliminada")
                         st.rerun()
 
         if "edit_product_id" in st.session_state:
@@ -794,7 +925,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
             prod = prod_df.iloc[0]
 
             st.divider()
-            st.subheader(f"Editando: {prod['nombre']}")
+            st.subheader(f"Editando: {prod['nombre']} - {prod.get('variante') or ''}")
 
             with st.form("form_editar_producto"):
                 col1, col2 = st.columns(2)
@@ -862,9 +993,6 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                     st.success("Producto actualizado")
                     st.rerun()
 
-    # =========================
-    # USUARIOS
-    # =========================
     with tab2:
         st.subheader("Usuarios del Sistema")
 
