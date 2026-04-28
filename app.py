@@ -313,125 +313,53 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 st.warning("Completa todos los campos")
 
 # =========================
-# 📊 REPORTES - SOLO ADMIN (VERSIÓN SEGURA)
+# 📊 REPORTES - VERSIÓN DIAGNÓSTICO (Solo Admin)
 # =========================
 elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes y Gestión de Ventas")
     
-    st.subheader("Filtros de Búsqueda")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        fecha_desde = st.date_input("Desde", value=date(2025, 1, 1))
-    with col2:
-        fecha_hasta = st.date_input("Hasta", value=date.today())
-    with col3:
-        try:
-            vendedores_list = pd.read_sql("SELECT DISTINCT usuario FROM ventas", engine)['usuario'].tolist()
-        except:
-            vendedores_list = []
-        vendedor_filtro = st.selectbox("Vendedor", ["Todos"] + vendedores_list)
-
-    # Consulta SQL más simple y segura
-    sql = """
-        SELECT 
-            v.id,
-            v.fecha,
-            v.usuario,
-            COALESCE(p.nombre, 'Producto eliminado') as producto,
-            v.cantidad,
-            v.total,
-            v.ganancia
-        FROM ventas v
-        LEFT JOIN productos p ON v.producto_id = p.id
-        WHERE v.fecha >= :desde 
-          AND v.fecha <= :hasta
-    """
+    st.write("### Diagnóstico de Ventas")
     
-    params = {
-        "desde": f"{fecha_desde} 00:00:00",
-        "hasta": f"{fecha_hasta} 23:59:59"
-    }
+    # Botón para recargar
+    if st.button("🔄 Recargar Reportes"):
+        st.rerun()
 
-    if vendedor_filtro != "Todos":
-        sql += " AND v.usuario = :vendedor"
-        params["vendedor"] = vendedor_filtro
-
+    # Mostrar todas las ventas sin filtros complicados primero
     try:
-        ventas = pd.read_sql(sql + " ORDER BY v.fecha DESC", engine, params=params)
-    except Exception as e:
-        st.error(f"Error al cargar los reportes: {str(e)}")
-        ventas = pd.DataFrame()
-
-    if ventas.empty:
-        st.warning("No se encontraron ventas en el rango seleccionado.")
-        st.info("💡 Prueba ampliando el rango de fechas o verifica que hayas cobrado la venta.")
-    else:
-        # Métricas
-        c1, c2, c3, c4 = st.columns(4)
-        with c1: st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
-        with c2: st.metric("Ganancia Estimada", f"${ventas['ganancia'].sum():,.0f}")
-        with c3: st.metric("Número de Ventas", len(ventas))
-        with c4: st.metric("Unidades Vendidas", int(ventas['cantidad'].sum()))
-
-        st.subheader("Historial de Ventas")
+        ventas = pd.read_sql("""
+            SELECT 
+                v.id,
+                v.fecha,
+                v.usuario,
+                p.nombre as producto,
+                v.cantidad,
+                v.total,
+                v.ganancia
+            FROM ventas v
+            LEFT JOIN productos p ON v.producto_id = p.id
+            ORDER BY v.fecha DESC
+        """, engine)
         
-        for _, row in ventas.iterrows():
-            col1, col2, col3, col4, col5 = st.columns([2, 2.5, 1.8, 1, 1])
+        st.success(f"Total de ventas encontradas: {len(ventas)}")
+        
+        if ventas.empty:
+            st.warning("No hay ninguna venta registrada en la base de datos.")
+            st.info("Realiza una venta nueva desde 'Agregar Producto' + 'Carrito' + 'Cobrar' para probar.")
+        else:
+            st.subheader("Todas las Ventas Registradas")
+            st.dataframe(ventas, use_container_width=True)
+            
+            # Métricas básicas
+            col1, col2, col3 = st.columns(3)
             with col1:
-                st.write(f"**{row['fecha'].strftime('%d/%m %H:%M')}**")
+                st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
             with col2:
-                st.write(f"{row['usuario']} → **{row['producto']}**")
+                st.metric("Ganancia Total", f"${ventas['ganancia'].sum():,.0f}")
             with col3:
-                st.write(f"{row['cantidad']} uds - ${row['total']:,.0f}")
-            with col4:
-                if st.button("✏️ Modificar", key=f"mod_{row['id']}"):
-                    st.session_state["edit_venta_id"] = row["id"]
-                    st.rerun()
-            with col5:
-                if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
-                    st.session_state["confirm_delete_venta"] = row["id"]
-                    st.rerun()
-            st.divider()
+                st.metric("Ventas Totales", len(ventas))
 
-    # Modificar Venta
-    if "edit_venta_id" in st.session_state:
-        vid = st.session_state["edit_venta_id"]
-        venta = pd.read_sql(f"SELECT * FROM ventas WHERE id = {vid}", engine).iloc[0]
-        st.subheader(f"Modificar Venta #{vid}")
-        nueva_cant = st.number_input("Nueva Cantidad", min_value=1, value=int(venta["cantidad"]))
-        if st.button("Guardar Cambio", type="primary"):
-            diff = nueva_cant - venta["cantidad"]
-            new_total = (venta["total"] / venta["cantidad"]) * nueva_cant
-            with engine.begin() as conn:
-                conn.execute(text("UPDATE ventas SET cantidad=:c, total=:t, ganancia=:t*0.3 WHERE id=:id"),
-                           {"c": nueva_cant, "t": new_total, "id": vid})
-                conn.execute(text("UPDATE productos SET stock = stock - :d WHERE id = :pid"),
-                           {"d": diff, "pid": venta["producto_id"]})
-            del st.session_state["edit_venta_id"]
-            st.success("✅ Venta modificada correctamente")
-            st.rerun()
-
-    # Eliminar Venta
-    if "confirm_delete_venta" in st.session_state:
-        vid = st.session_state["confirm_delete_venta"]
-        st.warning("¿Eliminar esta venta? El stock será devuelto automáticamente.")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Sí, Eliminar", type="primary"):
-                with engine.begin() as conn:
-                    v = conn.execute(text("SELECT producto_id, cantidad FROM ventas WHERE id = :id"), 
-                                   {"id": vid}).fetchone()
-                    if v:
-                        conn.execute(text("UPDATE productos SET stock = stock + :q WHERE id = :pid"),
-                                   {"q": v[1], "pid": v[0]})
-                        conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": vid})
-                st.success("Venta eliminada y stock devuelto")
-                del st.session_state["confirm_delete_venta"]
-                st.rerun()
-        with col2:
-            if st.button("Cancelar"):
-                del st.session_state["confirm_delete_venta"]
-                st.rerun()
+    except Exception as e:
+        st.error(f"Error al leer las ventas: {str(e)}")
 
 else:
     st.info("Selecciona un módulo desde la barra lateral.")
