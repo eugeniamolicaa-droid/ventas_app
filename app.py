@@ -1,5 +1,7 @@
 import base64
 import hashlib
+import uuid
+
 from datetime import datetime
 
 import pandas as pd
@@ -86,7 +88,7 @@ def image_to_base64(uploaded_file):
     return encoded
 
 
-def show_product_image(img_base64, width=220):
+def show_image_from_base64(img_base64, width=220):
     if img_base64 and isinstance(img_base64, str) and len(img_base64) > 20:
         try:
             st.image(base64.b64decode(img_base64), width=width)
@@ -154,6 +156,20 @@ with engine.begin() as conn:
             cantidad INT,
             total FLOAT,
             ganancia FLOAT,
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            venta_grupo TEXT
+        )
+    """))
+
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS cobros (
+            id SERIAL PRIMARY KEY,
+            venta_grupo TEXT,
+            usuario TEXT,
+            total FLOAT,
+            efectivo FLOAT DEFAULT 0,
+            transferencia FLOAT DEFAULT 0,
+            comprobante TEXT,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """))
@@ -161,9 +177,13 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen TEXT;"))
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS costo FLOAT DEFAULT 0;"))
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS stock INT DEFAULT 0;"))
+    conn.execute(text("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS venta_grupo TEXT;"))
+    conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS comprobante TEXT;"))
 
 
+# =========================
 # ADMIN DEFAULT
+# =========================
 with engine.begin() as conn:
     existe_admin = conn.execute(
         text("SELECT 1 FROM usuarios WHERE username='admin'")
@@ -281,7 +301,7 @@ if menu == "🛒 Agregar Producto":
 
         for idx, row in df_filtrado.reset_index(drop=True).iterrows():
             with cols[idx % 3]:
-                show_product_image(row.get("imagen"), width=220)
+                show_image_from_base64(row.get("imagen"), width=220)
 
                 stock = int(row["stock"] or 0)
                 precio = float(row["precio"] or 0)
@@ -352,62 +372,134 @@ elif menu == "🛍️ Carrito":
         st.divider()
         st.subheader(f"Total: ${total:,.0f}")
 
-        c1, c2 = st.columns(2)
+        st.markdown("### 💳 Forma de pago")
 
-        with c1:
+        colp1, colp2 = st.columns(2)
+
+        with colp1:
+            pago_efectivo = st.number_input(
+                "💵 Efectivo",
+                min_value=0.0,
+                value=float(total),
+                step=100.0,
+                key="pago_efectivo"
+            )
+
+        with colp2:
+            pago_transferencia = st.number_input(
+                "🏦 Transferencia",
+                min_value=0.0,
+                value=0.0,
+                step=100.0,
+                key="pago_transferencia"
+            )
+
+        comprobante_transferencia = None
+
+        if pago_transferencia > 0:
+            comprobante_transferencia = st.file_uploader(
+                "📸 Comprobante de transferencia",
+                type=["jpg", "jpeg", "png"],
+                key="comprobante_transferencia"
+            )
+
+        total_pagado = pago_efectivo + pago_transferencia
+        diferencia = total_pagado - total
+
+        st.write(f"**Pagado:** ${total_pagado:,.0f}")
+
+        if diferencia < 0:
+            st.warning(f"Faltan pagar: ${abs(diferencia):,.0f}")
+        elif diferencia > 0:
+            st.info(f"Vuelto / sobrante: ${diferencia:,.0f}")
+        else:
+            st.success("Pago exacto ✅")
+
+        colb1, colb2 = st.columns(2)
+
+        with colb1:
             if st.button("🧹 Vaciar carrito", use_container_width=True, key="vaciar_carrito"):
                 st.session_state["cart"] = []
                 st.rerun()
 
-        with c2:
+        with colb2:
             if st.button("💳 Cobrar Venta", type="primary", use_container_width=True, key="cobrar_venta"):
-                try:
-                    with engine.begin() as conn:
-                        for item in cart:
-                            producto = conn.execute(text("""
-                                SELECT stock, costo, precio
-                                FROM productos
-                                WHERE id=:id
-                            """), {"id": item["id"]}).fetchone()
 
-                            if not producto:
-                                raise Exception(f"Producto no encontrado: {item['name']}")
+                if total_pagado < total:
+                    st.error("❌ El pago no alcanza para cubrir el total")
 
-                            stock_actual = int(producto[0] or 0)
+                elif pago_transferencia > 0 and comprobante_transferencia is None:
+                    st.error("❌ Debes subir el comprobante de transferencia")
 
-                            if stock_actual < item["qty"]:
-                                raise Exception(f"Stock insuficiente para {item['name']}")
+                else:
+                    try:
+                        venta_grupo = str(uuid.uuid4())
+                        comprobante_base64 = image_to_base64(comprobante_transferencia)
 
-                        for item in cart:
+                        with engine.begin() as conn:
+                            # Validar stock de todos los productos antes de cobrar
+                            for item in cart:
+                                producto = conn.execute(text("""
+                                    SELECT stock, costo, precio
+                                    FROM productos
+                                    WHERE id=:id
+                                """), {"id": item["id"]}).fetchone()
+
+                                if not producto:
+                                    raise Exception(f"Producto no encontrado: {item['name']}")
+
+                                stock_actual = int(producto[0] or 0)
+
+                                if stock_actual < item["qty"]:
+                                    raise Exception(f"Stock insuficiente para {item['name']}")
+
+                            # Registrar cobro general
                             conn.execute(text("""
-                                UPDATE productos
-                                SET stock = stock - :q
-                                WHERE id = :id
+                                INSERT INTO cobros
+                                (venta_grupo, usuario, total, efectivo, transferencia, comprobante, fecha)
+                                VALUES (:vg, :user, :total, :efectivo, :transferencia, :comprobante, NOW())
                             """), {
-                                "q": item["qty"],
-                                "id": item["id"]
-                            })
-
-                            total_item = item["price"] * item["qty"]
-                            ganancia_item = (item["price"] - item["cost"]) * item["qty"]
-
-                            conn.execute(text("""
-                                INSERT INTO ventas (producto_id, usuario, cantidad, total, ganancia, fecha)
-                                VALUES (:pid, :user, :qty, :total, :ganancia, NOW())
-                            """), {
-                                "pid": item["id"],
+                                "vg": venta_grupo,
                                 "user": USER,
-                                "qty": item["qty"],
-                                "total": total_item,
-                                "ganancia": ganancia_item
+                                "total": total,
+                                "efectivo": float(pago_efectivo),
+                                "transferencia": float(pago_transferencia),
+                                "comprobante": comprobante_base64
                             })
 
-                    st.session_state["cart"] = []
-                    st.success("✅ Venta completada exitosamente")
-                    st.rerun()
+                            # Registrar cada producto vendido
+                            for item in cart:
+                                conn.execute(text("""
+                                    UPDATE productos
+                                    SET stock = stock - :q
+                                    WHERE id = :id
+                                """), {
+                                    "q": item["qty"],
+                                    "id": item["id"]
+                                })
 
-                except Exception as e:
-                    st.error(f"Error al cobrar: {str(e)}")
+                                total_item = item["price"] * item["qty"]
+                                ganancia_item = (item["price"] - item["cost"]) * item["qty"]
+
+                                conn.execute(text("""
+                                    INSERT INTO ventas
+                                    (producto_id, usuario, cantidad, total, ganancia, fecha, venta_grupo)
+                                    VALUES (:pid, :user, :qty, :total, :ganancia, NOW(), :vg)
+                                """), {
+                                    "pid": item["id"],
+                                    "user": USER,
+                                    "qty": item["qty"],
+                                    "total": total_item,
+                                    "ganancia": ganancia_item,
+                                    "vg": venta_grupo
+                                })
+
+                        st.session_state["cart"] = []
+                        st.success("✅ Venta completada exitosamente")
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"Error al cobrar: {str(e)}")
 
 
 # =========================
@@ -538,7 +630,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                     e_stock = st.number_input("Stock", value=int(prod["stock"] or 0), step=1, key="edit_stock")
 
                 st.write("Foto actual:")
-                show_product_image(prod.get("imagen"), width=280)
+                show_image_from_base64(prod.get("imagen"), width=280)
 
                 nueva_imagen = st.file_uploader(
                     "Cambiar foto",
@@ -679,6 +771,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
             SELECT
                 v.id AS venta_id,
                 v.producto_id,
+                v.venta_grupo,
                 v.fecha,
                 v.usuario,
                 p.nombre AS producto,
@@ -705,6 +798,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                     "Seleccionar",
                     "venta_id",
                     "producto_id",
+                    "venta_grupo",
                     "fecha",
                     "usuario",
                     "producto",
@@ -717,6 +811,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                     "Seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
                     "venta_id": st.column_config.NumberColumn("ID Venta", disabled=True),
                     "producto_id": st.column_config.NumberColumn("ID Producto", disabled=True),
+                    "venta_grupo": st.column_config.TextColumn("Grupo", disabled=True),
                     "fecha": st.column_config.DatetimeColumn("Fecha", format="DD/MM/YYYY HH:mm"),
                     "total": st.column_config.NumberColumn("Total", format="$%d"),
                     "ganancia": st.column_config.NumberColumn("Ganancia", format="$%d"),
@@ -724,6 +819,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                 disabled=[
                     "venta_id",
                     "producto_id",
+                    "venta_grupo",
                     "fecha",
                     "usuario",
                     "producto",
@@ -742,10 +838,16 @@ elif menu == "📊 Reportes" and ROL == "admin":
                     st.warning("No has seleccionado ninguna venta")
                 else:
                     with engine.begin() as conn:
+                        grupos_a_revisar = set()
+
                         for _, row in selected_rows.iterrows():
                             venta_id = int(row["venta_id"])
                             producto_id = int(row["producto_id"]) if pd.notna(row["producto_id"]) else None
                             cantidad = int(row["cantidad"])
+                            venta_grupo = row.get("venta_grupo")
+
+                            if pd.notna(venta_grupo) and venta_grupo:
+                                grupos_a_revisar.add(str(venta_grupo))
 
                             if producto_id:
                                 conn.execute(text("""
@@ -761,6 +863,20 @@ elif menu == "📊 Reportes" and ROL == "admin":
                                 DELETE FROM ventas
                                 WHERE id = :id
                             """), {"id": venta_id})
+
+                        # Si se eliminaron todas las ventas de un grupo, también eliminar el cobro asociado
+                        for grupo in grupos_a_revisar:
+                            restantes = conn.execute(text("""
+                                SELECT COUNT(*)
+                                FROM ventas
+                                WHERE venta_grupo = :vg
+                            """), {"vg": grupo}).scalar()
+
+                            if restantes == 0:
+                                conn.execute(text("""
+                                    DELETE FROM cobros
+                                    WHERE venta_grupo = :vg
+                                """), {"vg": grupo})
 
                     st.success(f"✅ Se eliminaron {len(selected_rows)} venta(s) y se devolvió el stock")
                     st.rerun()
@@ -781,8 +897,61 @@ elif menu == "📊 Reportes" and ROL == "admin":
             st.subheader("Ventas por usuario")
             st.bar_chart(ventas.groupby("usuario")["total"].sum())
 
+        st.divider()
+        st.header("💳 Cobros y Comprobantes")
+
+        cobros = pd.read_sql("""
+            SELECT id, venta_grupo, fecha, usuario, total, efectivo, transferencia, comprobante
+            FROM cobros
+            ORDER BY fecha DESC
+        """, engine)
+
+        if cobros.empty:
+            st.info("No hay cobros registrados")
+        else:
+            colp1, colp2, colp3 = st.columns(3)
+
+            with colp1:
+                st.metric("💵 Efectivo", f"${cobros['efectivo'].sum():,.0f}")
+
+            with colp2:
+                st.metric("🏦 Transferencia", f"${cobros['transferencia'].sum():,.0f}")
+
+            with colp3:
+                st.metric("💳 Total Cobrado", f"${cobros['total'].sum():,.0f}")
+
+            st.dataframe(
+                cobros[["id", "fecha", "usuario", "total", "efectivo", "transferencia"]],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.subheader("📸 Comprobantes de transferencia")
+
+            cobros_con_comprobante = cobros[
+                (cobros["transferencia"] > 0)
+                & (cobros["comprobante"].notna())
+            ]
+
+            if cobros_con_comprobante.empty:
+                st.info("No hay comprobantes cargados")
+            else:
+                for _, row in cobros_con_comprobante.iterrows():
+                    with st.expander(
+                        f"Comprobante #{row['id']} - {row['usuario']} - ${row['transferencia']:,.0f}"
+                    ):
+                        st.write(f"Fecha: {row['fecha']}")
+                        st.write(f"Total venta: ${row['total']:,.0f}")
+                        st.write(f"Efectivo: ${row['efectivo']:,.0f}")
+                        st.write(f"Transferencia: ${row['transferencia']:,.0f}")
+
+                        try:
+                            st.image(base64.b64decode(row["comprobante"]), width=350)
+                        except Exception:
+                            st.error("No se pudo mostrar el comprobante")
+
     except Exception as e:
-        st.error(f"Error al leer las ventas: {str(e)}")
+        st.error(f"Error al leer los reportes: {str(e)}")
 
 
 else:
