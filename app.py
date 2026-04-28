@@ -36,11 +36,15 @@ body {background-color: #0e1117; color: white;}
 """, unsafe_allow_html=True)
 
 # =========================
-# 🔌 DB
+# 🔌 DB SUPABASE
 # =========================
 DB_URL = st.secrets["DB_URL"]
 
-engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=300)
+engine = create_engine(
+    DB_URL,
+    pool_pre_ping=True,
+    pool_recycle=300
+)
 
 # =========================
 # 🧱 TABLAS
@@ -194,20 +198,54 @@ if st.session_state["rol"] == "admin":
     st.header("🔐 ADMIN PANEL")
 
     # =========================
-    # 👤 USUARIOS
+    # 👤 USUARIOS (CREAR)
     # =========================
-    st.subheader("👤 Usuarios")
+    st.subheader("👤 Crear usuario")
 
-    users = pd.read_sql("SELECT * FROM usuarios", engine)
-    st.dataframe(users)
+    u1, u2, u3 = st.columns(3)
 
-    del_user = st.text_input("Eliminar usuario")
+    new_user = u1.text_input("Usuario")
+    new_pass = u2.text_input("Clave", type="password")
+    new_rol = u3.selectbox("Rol", ["admin", "vendedor"])
 
-    if st.button("🗑️ Eliminar usuario"):
+    if st.button("Crear usuario"):
+
+        if new_user and new_pass:
+
+            with engine.begin() as conn:
+
+                existe = conn.execute(text("""
+                    SELECT * FROM usuarios WHERE username=:u
+                """), {"u": new_user.strip().lower()}).fetchone()
+
+                if existe:
+                    st.error("Ya existe ese usuario")
+                else:
+                    conn.execute(text("""
+                        INSERT INTO usuarios (username,password,rol)
+                        VALUES (:u,:p,:r)
+                    """), {
+                        "u": new_user.strip().lower(),
+                        "p": hash_pass(new_pass),
+                        "r": new_rol
+                    })
+
+                    st.success("Usuario creado")
+                    st.rerun()
+
+    # =========================
+    # 🗑️ ELIMINAR USUARIO
+    # =========================
+    st.subheader("🗑️ Eliminar usuario")
+
+    del_user = st.text_input("Usuario a eliminar")
+
+    if st.button("Eliminar usuario"):
 
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM usuarios WHERE username=:u"),
-                         {"u": del_user.strip().lower()})
+            conn.execute(text("""
+                DELETE FROM usuarios WHERE username=:u
+            """), {"u": del_user.strip().lower()})
 
         st.success("Usuario eliminado")
         st.rerun()
@@ -245,32 +283,16 @@ if st.session_state["rol"] == "admin":
         st.rerun()
 
     # =========================
-    # ❌ ELIMINAR PRODUCTO
-    # =========================
-    st.subheader("🗑️ Eliminar producto")
-
-    del_prod = st.text_input("ID producto")
-
-    if st.button("Eliminar producto"):
-
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM productos WHERE id=:id"),
-                         {"id": del_prod})
-
-        st.success("Producto eliminado")
-        st.rerun()
-
-    # =========================
     # 📊 DASHBOARD
     # =========================
     ventas = pd.read_sql("SELECT * FROM ventas", engine)
 
     if not ventas.empty:
 
-        st.metric("💰 Total", ventas["total"].sum())
+        st.metric("💰 Total vendido", ventas["total"].sum())
         st.metric("📈 Ganancia", ventas["ganancia"].sum())
 
-        st.subheader("Ranking")
+        st.subheader("Ranking vendedores")
         st.bar_chart(ventas.groupby("usuario")["total"].sum())
 
     else:
