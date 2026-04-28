@@ -852,6 +852,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
         if cobros.empty:
             st.warning("No hay ventas registradas todavía")
+
         else:
             col1, col2, col3, col4 = st.columns(4)
 
@@ -941,72 +942,68 @@ elif menu == "📊 Reportes" and ROL == "admin":
                             st.metric("Ganancia", f"${detalle['ganancia'].sum():,.0f}")
 
                     st.divider()
-
                     st.markdown("### 🧹 Acciones sobre esta venta")
 
-col_accion1, col_accion2 = st.columns(2)
+                    col_accion1, col_accion2 = st.columns(2)
 
-with col_accion1:
-    if st.button(
-        "↩️ Anular y devolver stock",
-        key=f"anular_devolver_{venta_grupo}"
-    ):
+                    with col_accion1:
+                        if st.button(
+                            "↩️ Anular y devolver stock",
+                            key=f"anular_devolver_{venta_grupo}"
+                        ):
+                            with engine.begin() as conn:
+                                ventas_grupo = conn.execute(text("""
+                                    SELECT id, producto_id, cantidad
+                                    FROM ventas
+                                    WHERE venta_grupo = :vg
+                                """), {"vg": venta_grupo}).fetchall()
 
-        with engine.begin() as conn:
-            ventas_grupo = conn.execute(text("""
-                SELECT id, producto_id, cantidad
-                FROM ventas
-                WHERE venta_grupo = :vg
-            """), {"vg": venta_grupo}).fetchall()
+                                for venta in ventas_grupo:
+                                    venta_id = venta[0]
+                                    producto_id = venta[1]
+                                    cantidad = venta[2]
 
-            for venta in ventas_grupo:
-                venta_id = venta[0]
-                producto_id = venta[1]
-                cantidad = venta[2]
+                                    if producto_id:
+                                        conn.execute(text("""
+                                            UPDATE productos
+                                            SET stock = stock + :q
+                                            WHERE id = :pid
+                                        """), {
+                                            "q": cantidad,
+                                            "pid": producto_id
+                                        })
 
-                if producto_id:
-                    conn.execute(text("""
-                        UPDATE productos
-                        SET stock = stock + :q
-                        WHERE id = :pid
-                    """), {
-                        "q": cantidad,
-                        "pid": producto_id
-                    })
+                                    conn.execute(text("""
+                                        DELETE FROM ventas
+                                        WHERE id = :id
+                                    """), {"id": venta_id})
 
-                conn.execute(text("""
-                    DELETE FROM ventas
-                    WHERE id = :id
-                """), {"id": venta_id})
+                                conn.execute(text("""
+                                    DELETE FROM cobros
+                                    WHERE venta_grupo = :vg
+                                """), {"vg": venta_grupo})
 
-            conn.execute(text("""
-                DELETE FROM cobros
-                WHERE venta_grupo = :vg
-            """), {"vg": venta_grupo})
+                            st.success("✅ Venta anulada y stock devuelto")
+                            st.rerun()
 
-        st.success("✅ Venta anulada y stock devuelto")
-        st.rerun()
+                    with col_accion2:
+                        if st.button(
+                            "🗑️ Eliminar sin devolver stock",
+                            key=f"eliminar_sin_stock_{venta_grupo}"
+                        ):
+                            with engine.begin() as conn:
+                                conn.execute(text("""
+                                    DELETE FROM ventas
+                                    WHERE venta_grupo = :vg
+                                """), {"vg": venta_grupo})
 
+                                conn.execute(text("""
+                                    DELETE FROM cobros
+                                    WHERE venta_grupo = :vg
+                                """), {"vg": venta_grupo})
 
-with col_accion2:
-    if st.button(
-        "🗑️ Eliminar sin devolver stock",
-        key=f"eliminar_sin_stock_{venta_grupo}"
-    ):
-
-        with engine.begin() as conn:
-            conn.execute(text("""
-                DELETE FROM ventas
-                WHERE venta_grupo = :vg
-            """), {"vg": venta_grupo})
-
-            conn.execute(text("""
-                DELETE FROM cobros
-                WHERE venta_grupo = :vg
-            """), {"vg": venta_grupo})
-
-        st.success("✅ Venta eliminada sin modificar stock")
-        st.rerun()
+                            st.success("✅ Venta eliminada sin modificar stock")
+                            st.rerun()
 
             st.divider()
             st.subheader("📊 Ranking de vendedores")
