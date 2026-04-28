@@ -5,29 +5,28 @@ import hashlib
 from sqlalchemy import create_engine, text
 
 # =========================
-# 🍎 UI GOD MODE
+# 🎨 UI ERP STYLE
 # =========================
-st.set_page_config(page_title="SHOP PRO", layout="wide")
+st.set_page_config(page_title="ERP PRO", layout="wide")
 
 st.markdown("""
 <style>
-html, body {
-    background: radial-gradient(circle at top, #0b0f1a, #05070d);
+body {
+    background: #0b0f14;
     color: white;
-    font-family: -apple-system, BlinkMacSystemFont;
+    font-family: -apple-system;
 }
 
 .card {
     background: rgba(255,255,255,0.06);
     padding: 14px;
-    border-radius: 18px;
+    border-radius: 16px;
     margin: 10px 0;
-    backdrop-filter: blur(14px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+    backdrop-filter: blur(10px);
 }
 
-button {
-    border-radius: 12px !important;
+section[data-testid="stSidebar"] {
+    background: #0a0d12;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -42,16 +41,15 @@ def hash_pass(p):
 # 🔌 DB
 # =========================
 DB_URL = st.secrets["DB_URL"]
-
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # =========================
-# 🧱 INIT TABLES
+# 🧱 INIT TABLES ERP
 # =========================
 with engine.begin() as conn:
 
     conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS usuarios (
+    CREATE TABLE IF NOT EXISTS usuarios(
         id SERIAL PRIMARY KEY,
         username TEXT UNIQUE,
         password TEXT,
@@ -60,7 +58,7 @@ with engine.begin() as conn:
     """))
 
     conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS productos (
+    CREATE TABLE IF NOT EXISTS productos(
         id SERIAL PRIMARY KEY,
         categoria TEXT,
         nombre TEXT,
@@ -73,7 +71,7 @@ with engine.begin() as conn:
     """))
 
     conn.execute(text("""
-    CREATE TABLE IF NOT EXISTS ventas (
+    CREATE TABLE IF NOT EXISTS ventas(
         id SERIAL PRIMARY KEY,
         producto_id INT,
         usuario TEXT,
@@ -98,12 +96,13 @@ with engine.begin() as conn:
 # =========================
 # 🔐 LOGIN
 # =========================
-st.title("🛍️ SHOP PRO — GOD MODE")
+st.title("🏢 ERP PRO SYSTEM")
 
 user = st.text_input("Usuario")
 pwd = st.text_input("Clave", type="password")
 
 if st.button("Entrar"):
+
     with engine.connect() as conn:
         data = conn.execute(text("""
         SELECT * FROM usuarios
@@ -115,7 +114,9 @@ if st.button("Entrar"):
         st.session_state["user"] = data[1]
         st.session_state["rol"] = data[3]
         st.session_state["cart"] = []
+        st.session_state["cash_open"] = True
         st.rerun()
+
     else:
         st.error("Login incorrecto")
 
@@ -125,32 +126,36 @@ if "login" not in st.session_state:
 USER = st.session_state["user"]
 ROL = st.session_state["rol"]
 
-st.sidebar.success(USER)
-st.sidebar.info(ROL)
+# =========================
+# SIDEBAR ERP
+# =========================
+st.sidebar.title("ERP PRO")
+st.sidebar.write(f"👤 {USER}")
+st.sidebar.write(f"🔐 {ROL}")
 
-menu = st.sidebar.radio("Navegación", ["🛒 Tienda", "🧾 Carrito", "📦 Admin"])
+menu = st.sidebar.radio("Módulos", ["POS", "Carrito", "Admin", "Caja"])
 
 df = pd.read_sql("SELECT * FROM productos", engine)
 
 # =========================
-# 🛒 TIENDA
+# 🛒 POS
 # =========================
-if menu == "🛒 Tienda":
+if menu == "POS":
 
-    st.header("🛍️ Productos")
+    st.header("🛒 Punto de Venta")
 
     for _, r in df.iterrows():
 
         st.markdown(f"""
         <div class="card">
-        <b>{r['nombre']} - {r['variante']}</b><br>
+        <b>{r['nombre']}</b> - {r['variante']}<br>
         💲 {r['precio']} | Stock: {r['stock']}
         </div>
         """, unsafe_allow_html=True)
 
         qty = st.number_input("Cantidad", 1, 20, key=f"q{r['id']}")
 
-        if st.button("Agregar al carrito", key=f"a{r['id']}"):
+        if st.button("Agregar", key=f"a{r['id']}"):
 
             st.session_state["cart"].append({
                 "id": r["id"],
@@ -159,69 +164,74 @@ if menu == "🛒 Tienda":
                 "qty": qty
             })
 
-            st.success("Agregado al carrito")
+            st.success("Agregado")
 
 # =========================
-# 🧾 CARRITO (SHOPIFY CORE)
+# 🧾 CARRITO ERP
 # =========================
-elif menu == "🧾 Carrito":
+elif menu == "Carrito":
 
-    st.header("🧾 Tu carrito")
+    st.header("🧾 Carrito")
 
     cart = st.session_state["cart"]
 
     if not cart:
-        st.info("Carrito vacío")
+        st.info("Vacío")
     else:
 
         total = 0
 
-        for item in cart:
-            subtotal = item["price"] * item["qty"]
-            total += subtotal
+        for i, item in enumerate(cart):
+            sub = item["price"] * item["qty"]
+            total += sub
 
-            st.write(f"{item['name']} x{item['qty']} = ${subtotal}")
+            col1, col2 = st.columns([3,1])
+
+            with col1:
+                st.write(f"{item['name']} x{item['qty']} = {sub}")
+
+            with col2:
+                if st.button("❌", key=f"rm{i}"):
+                    cart.pop(i)
+                    st.rerun()
 
         st.divider()
-        st.subheader(f"TOTAL: ${total}")
+        st.subheader(f"TOTAL: {total}")
 
-        if st.button("💳 FINALIZAR COMPRA"):
+        if st.button("💳 Cobrar"):
 
             with engine.begin() as conn:
 
                 for item in cart:
 
                     conn.execute(text("""
-                    UPDATE productos
-                    SET stock = stock - :q
-                    WHERE id=:id
+                    UPDATE productos SET stock = stock - :q WHERE id=:id
                     """), {"q":item["qty"],"id":item["id"]})
 
                     conn.execute(text("""
-                    INSERT INTO ventas
-                    (producto_id,usuario,cantidad,total,ganancia,fecha)
+                    INSERT INTO ventas(producto_id,usuario,cantidad,total,ganancia,fecha)
                     VALUES(:p,:u,:c,:t,:g,:f)
                     """), {
-                        "p": item["id"],
-                        "u": USER,
-                        "c": item["qty"],
-                        "t": item["price"] * item["qty"],
-                        "g": item["price"] * item["qty"] * 0.3,
-                        "f": datetime.now()
+                        "p":item["id"],
+                        "u":USER,
+                        "c":item["qty"],
+                        "t":item["price"]*item["qty"],
+                        "g":item["price"]*item["qty"]*0.3,
+                        "f":datetime.now()
                     })
 
             st.session_state["cart"] = []
-            st.success("Compra realizada")
+            st.success("Venta completada")
             st.rerun()
 
 # =========================
-# 👑 ADMIN GOD MODE
+# 👑 ADMIN ERP
 # =========================
-elif menu == "📦 Admin" and ROL == "admin":
+elif menu == "Admin" and ROL == "admin":
 
-    st.header("👑 PANEL DIOS")
+    st.header("👑 ERP ADMIN")
 
-    users = pd.read_sql("SELECT id,username,rol FROM usuarios", engine)
+    users = pd.read_sql("SELECT * FROM usuarios", engine)
     st.subheader("Usuarios")
     st.dataframe(users)
 
@@ -232,30 +242,24 @@ elif menu == "📦 Admin" and ROL == "admin":
     np = p.text_input("pass", type="password")
     nr = r.selectbox("rol",["admin","vendedor"])
 
-    if st.button("Crear"):
+    if st.button("Crear usuario"):
         with engine.begin() as conn:
             conn.execute(text("""
             INSERT INTO usuarios(username,password,rol)
             VALUES(:u,:p,:r)
             """), {"u":nu,"p":hash_pass(np),"r":nr})
+        st.success("OK")
 
-        st.success("Usuario creado")
+# =========================
+# 💰 CAJA ERP
+# =========================
+elif menu == "Caja":
 
-    st.subheader("Eliminar usuario")
-
-    delu = st.selectbox("usuario", users["username"])
-
-    if st.button("Eliminar"):
-        if delu != "admin":
-            with engine.begin() as conn:
-                conn.execute(text("DELETE FROM usuarios WHERE username=:u"), {"u":delu})
-            st.success("Eliminado")
-
-    st.subheader("📊 Dashboard")
+    st.header("💰 Caja")
 
     ventas = pd.read_sql("SELECT * FROM ventas", engine)
 
     if not ventas.empty:
-        st.metric("Ventas", ventas["total"].sum())
+        st.metric("Total vendido", ventas["total"].sum())
         st.metric("Ganancia", ventas["ganancia"].sum())
         st.bar_chart(ventas.groupby("usuario")["total"].sum())
