@@ -38,11 +38,19 @@ body {background-color: #0e1117; color: white;}
 # =========================
 # 🧠 CONEXIÓN SUPABASE
 # =========================
+from sqlalchemy import create_engine
+
+DB_URL = "postgresql+psycopg2://postgres:Meridda2026@db.ytsfrsogreiebxrquuaf.supabase.co:5432/postgres"
+
 engine = create_engine(
-    st.secrets["DB_URL"],
-    pool_pre_ping=True,
-    connect_args={"sslmode": "require"}
+    DB_URL,
+    connect_args={"sslmode": "require"},
+    pool_pre_ping=True
 )
+
+# 👇 AQUÍ VA EL TEST (ARRIBA DE TODO EL RESTO)
+with engine.connect() as conn:
+    st.write(conn.execute(text("SELECT 1")).fetchone())
 
 # =========================
 # 🧱 CREAR TABLAS (AUTO)
