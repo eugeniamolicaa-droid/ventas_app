@@ -9,10 +9,6 @@ engine = create_engine(
     pool_pre_ping=True
 )
 
-# 🧪 TEST DE CONEXIÓN (TEMPORAL)
-with engine.connect() as conn:
-    st.write("Conexión OK", conn.execute(text("SELECT 1")).fetchone())
-
 # =========================
 # 🔐 FUNCIONES
 # =========================
@@ -56,6 +52,13 @@ if "login" not in st.session_state:
     st.stop()
 
 st.write(f"👤 {st.session_state['user']} | {st.session_state['rol']}")
+
+if st.button("TEST DB"):
+    try:
+        with engine.connect() as conn:
+            st.success(conn.execute(text("SELECT 1")).fetchone())
+    except Exception as e:
+        st.error(e)
 
 # =========================
 # PRODUCTOS
