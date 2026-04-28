@@ -380,7 +380,8 @@ elif menu == "🛍️ Carrito":
             pago_efectivo = st.number_input(
                 "💵 Efectivo",
                 min_value=0.0,
-                value=float(total),
+                max_value=float(total),
+                value=0.0,
                 step=100.0,
                 key="pago_efectivo"
             )
@@ -389,6 +390,7 @@ elif menu == "🛍️ Carrito":
             pago_transferencia = st.number_input(
                 "🏦 Transferencia",
                 min_value=0.0,
+                max_value=float(total),
                 value=0.0,
                 step=100.0,
                 key="pago_transferencia"
@@ -411,7 +413,7 @@ elif menu == "🛍️ Carrito":
         if diferencia < 0:
             st.warning(f"Faltan pagar: ${abs(diferencia):,.0f}")
         elif diferencia > 0:
-            st.info(f"Vuelto / sobrante: ${diferencia:,.0f}")
+            st.error(f"El pago supera el total por: ${diferencia:,.0f}")
         else:
             st.success("Pago exacto ✅")
 
@@ -428,6 +430,9 @@ elif menu == "🛍️ Carrito":
                 if total_pagado < total:
                     st.error("❌ El pago no alcanza para cubrir el total")
 
+                elif total_pagado > total:
+                    st.error("❌ El pago no puede ser mayor al total de los productos")
+
                 elif pago_transferencia > 0 and comprobante_transferencia is None:
                     st.error("❌ Debes subir el comprobante de transferencia")
 
@@ -437,7 +442,7 @@ elif menu == "🛍️ Carrito":
                         comprobante_base64 = image_to_base64(comprobante_transferencia)
 
                         with engine.begin() as conn:
-                            # Validar stock de todos los productos antes de cobrar
+                            # Validar stock antes de cobrar
                             for item in cart:
                                 producto = conn.execute(text("""
                                     SELECT stock, costo, precio
@@ -453,7 +458,7 @@ elif menu == "🛍️ Carrito":
                                 if stock_actual < item["qty"]:
                                     raise Exception(f"Stock insuficiente para {item['name']}")
 
-                            # Registrar cobro general
+                            # Registrar cobro total de la venta
                             conn.execute(text("""
                                 INSERT INTO cobros
                                 (venta_grupo, usuario, total, efectivo, transferencia, comprobante, fecha)
@@ -467,7 +472,7 @@ elif menu == "🛍️ Carrito":
                                 "comprobante": comprobante_base64
                             })
 
-                            # Registrar cada producto vendido
+                            # Registrar productos vendidos
                             for item in cart:
                                 conn.execute(text("""
                                     UPDATE productos
@@ -500,7 +505,6 @@ elif menu == "🛍️ Carrito":
 
                     except Exception as e:
                         st.error(f"Error al cobrar: {str(e)}")
-
 
 # =========================
 # ⚙️ ADMIN
@@ -761,198 +765,165 @@ elif menu == "⚙️ Admin" and ROL == "admin":
 elif menu == "📊 Reportes" and ROL == "admin":
     require_admin()
 
-    st.header("📊 Reportes y Gestión de Ventas")
+    st.header("📊 Reportes de Ventas")
 
     if st.button("🔄 Recargar Reportes", key="recargar_reportes"):
         st.rerun()
 
     try:
-        ventas = pd.read_sql("""
-            SELECT
-                v.id AS venta_id,
-                v.producto_id,
-                v.venta_grupo,
-                v.fecha,
-                v.usuario,
-                p.nombre AS producto,
-                v.cantidad,
-                v.total,
-                v.ganancia
-            FROM ventas v
-            LEFT JOIN productos p ON v.producto_id = p.id
-            ORDER BY v.fecha DESC
-        """, engine)
-
-        st.success(f"Total de ventas encontradas: {len(ventas)}")
-
-        if ventas.empty:
-            st.warning("No hay ventas registradas aún")
-        else:
-            st.subheader("Selecciona las ventas que deseas eliminar")
-
-            ventas = ventas.copy()
-            ventas["Seleccionar"] = False
-
-            edited_df = st.data_editor(
-                ventas[[
-                    "Seleccionar",
-                    "venta_id",
-                    "producto_id",
-                    "venta_grupo",
-                    "fecha",
-                    "usuario",
-                    "producto",
-                    "cantidad",
-                    "total",
-                    "ganancia"
-                ]],
-                hide_index=True,
-                column_config={
-                    "Seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
-                    "venta_id": st.column_config.NumberColumn("ID Venta", disabled=True),
-                    "producto_id": st.column_config.NumberColumn("ID Producto", disabled=True),
-                    "venta_grupo": st.column_config.TextColumn("Grupo", disabled=True),
-                    "fecha": st.column_config.DatetimeColumn("Fecha", format="DD/MM/YYYY HH:mm"),
-                    "total": st.column_config.NumberColumn("Total", format="$%d"),
-                    "ganancia": st.column_config.NumberColumn("Ganancia", format="$%d"),
-                },
-                disabled=[
-                    "venta_id",
-                    "producto_id",
-                    "venta_grupo",
-                    "fecha",
-                    "usuario",
-                    "producto",
-                    "cantidad",
-                    "total",
-                    "ganancia"
-                ],
-                use_container_width=True,
-                key="editor_ventas"
-            )
-
-            if st.button("🗑️ Eliminar Ventas Seleccionadas", type="primary", key="eliminar_ventas"):
-                selected_rows = edited_df[edited_df["Seleccionar"] == True]
-
-                if selected_rows.empty:
-                    st.warning("No has seleccionado ninguna venta")
-                else:
-                    with engine.begin() as conn:
-                        grupos_a_revisar = set()
-
-                        for _, row in selected_rows.iterrows():
-                            venta_id = int(row["venta_id"])
-                            producto_id = int(row["producto_id"]) if pd.notna(row["producto_id"]) else None
-                            cantidad = int(row["cantidad"])
-                            venta_grupo = row.get("venta_grupo")
-
-                            if pd.notna(venta_grupo) and venta_grupo:
-                                grupos_a_revisar.add(str(venta_grupo))
-
-                            if producto_id:
-                                conn.execute(text("""
-                                    UPDATE productos
-                                    SET stock = stock + :q
-                                    WHERE id = :pid
-                                """), {
-                                    "q": cantidad,
-                                    "pid": producto_id
-                                })
-
-                            conn.execute(text("""
-                                DELETE FROM ventas
-                                WHERE id = :id
-                            """), {"id": venta_id})
-
-                        # Si se eliminaron todas las ventas de un grupo, también eliminar el cobro asociado
-                        for grupo in grupos_a_revisar:
-                            restantes = conn.execute(text("""
-                                SELECT COUNT(*)
-                                FROM ventas
-                                WHERE venta_grupo = :vg
-                            """), {"vg": grupo}).scalar()
-
-                            if restantes == 0:
-                                conn.execute(text("""
-                                    DELETE FROM cobros
-                                    WHERE venta_grupo = :vg
-                                """), {"vg": grupo})
-
-                    st.success(f"✅ Se eliminaron {len(selected_rows)} venta(s) y se devolvió el stock")
-                    st.rerun()
-
-            st.divider()
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
-
-            with col2:
-                st.metric("Ganancia Total", f"${ventas['ganancia'].sum():,.0f}")
-
-            with col3:
-                st.metric("Ventas Totales", len(ventas))
-
-            st.subheader("Ventas por usuario")
-            st.bar_chart(ventas.groupby("usuario")["total"].sum())
-
-        st.divider()
-        st.header("💳 Cobros y Comprobantes")
-
         cobros = pd.read_sql("""
-            SELECT id, venta_grupo, fecha, usuario, total, efectivo, transferencia, comprobante
+            SELECT
+                id,
+                venta_grupo,
+                fecha,
+                usuario,
+                total,
+                efectivo,
+                transferencia,
+                comprobante
             FROM cobros
             ORDER BY fecha DESC
         """, engine)
 
         if cobros.empty:
-            st.info("No hay cobros registrados")
+            st.warning("No hay ventas registradas todavía")
         else:
-            colp1, colp2, colp3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
 
-            with colp1:
+            with col1:
+                st.metric("💰 Total Vendido", f"${cobros['total'].sum():,.0f}")
+
+            with col2:
                 st.metric("💵 Efectivo", f"${cobros['efectivo'].sum():,.0f}")
 
-            with colp2:
+            with col3:
                 st.metric("🏦 Transferencia", f"${cobros['transferencia'].sum():,.0f}")
 
-            with colp3:
-                st.metric("💳 Total Cobrado", f"${cobros['total'].sum():,.0f}")
+            with col4:
+                st.metric("🧾 Ventas", len(cobros))
 
-            st.dataframe(
-                cobros[["id", "fecha", "usuario", "total", "efectivo", "transferencia"]],
-                use_container_width=True,
-                hide_index=True
-            )
+            st.divider()
+            st.subheader("🧾 Ventas realizadas")
 
-            st.subheader("📸 Comprobantes de transferencia")
+            for _, cobro in cobros.iterrows():
+                venta_grupo = cobro["venta_grupo"]
 
-            cobros_con_comprobante = cobros[
-                (cobros["transferencia"] > 0)
-                & (cobros["comprobante"].notna())
-            ]
+                titulo = (
+                    f"Venta #{cobro['id']} | "
+                    f"{cobro['usuario']} | "
+                    f"${cobro['total']:,.0f} | "
+                    f"{pd.to_datetime(cobro['fecha']).strftime('%d/%m/%Y %H:%M')}"
+                )
 
-            if cobros_con_comprobante.empty:
-                st.info("No hay comprobantes cargados")
-            else:
-                for _, row in cobros_con_comprobante.iterrows():
-                    with st.expander(
-                        f"Comprobante #{row['id']} - {row['usuario']} - ${row['transferencia']:,.0f}"
-                    ):
-                        st.write(f"Fecha: {row['fecha']}")
-                        st.write(f"Total venta: ${row['total']:,.0f}")
-                        st.write(f"Efectivo: ${row['efectivo']:,.0f}")
-                        st.write(f"Transferencia: ${row['transferencia']:,.0f}")
+                with st.expander(titulo):
 
-                        try:
-                            st.image(base64.b64decode(row["comprobante"]), width=350)
-                        except Exception:
-                            st.error("No se pudo mostrar el comprobante")
+                    st.write("### 💳 Pago")
+                    p1, p2, p3 = st.columns(3)
+
+                    with p1:
+                        st.metric("Total", f"${cobro['total']:,.0f}")
+
+                    with p2:
+                        st.metric("Efectivo", f"${cobro['efectivo']:,.0f}")
+
+                    with p3:
+                        st.metric("Transferencia", f"${cobro['transferencia']:,.0f}")
+
+                    if cobro["transferencia"] > 0:
+                        st.write("### 📸 Comprobante")
+
+                        if cobro["comprobante"]:
+                            try:
+                                st.image(base64.b64decode(cobro["comprobante"]), width=350)
+                            except Exception:
+                                st.error("No se pudo mostrar el comprobante")
+                        else:
+                            st.warning("Esta venta tiene transferencia pero no tiene comprobante cargado")
+
+                    st.divider()
+                    st.write("### 🛍️ Productos vendidos")
+
+                    detalle = pd.read_sql(text("""
+                        SELECT
+                            v.id AS venta_id,
+                            v.producto_id,
+                            p.nombre AS producto,
+                            p.variante AS variante,
+                            v.cantidad,
+                            v.total,
+                            v.ganancia
+                        FROM ventas v
+                        LEFT JOIN productos p ON v.producto_id = p.id
+                        WHERE v.venta_grupo = :vg
+                        ORDER BY v.id
+                    """), engine, params={"vg": venta_grupo})
+
+                    if detalle.empty:
+                        st.warning("No hay productos asociados a esta venta")
+                    else:
+                        st.dataframe(
+                            detalle[["producto", "variante", "cantidad", "total", "ganancia"]],
+                            use_container_width=True,
+                            hide_index=True
+                        )
+
+                        d1, d2 = st.columns(2)
+
+                        with d1:
+                            st.metric("Total productos", f"${detalle['total'].sum():,.0f}")
+
+                        with d2:
+                            st.metric("Ganancia", f"${detalle['ganancia'].sum():,.0f}")
+
+                    st.divider()
+
+                    if st.button("🗑️ Eliminar esta venta y devolver stock", key=f"del_venta_grupo_{venta_grupo}"):
+
+                        with engine.begin() as conn:
+                            ventas_grupo = conn.execute(text("""
+                                SELECT id, producto_id, cantidad
+                                FROM ventas
+                                WHERE venta_grupo = :vg
+                            """), {"vg": venta_grupo}).fetchall()
+
+                            for venta in ventas_grupo:
+                                venta_id = venta[0]
+                                producto_id = venta[1]
+                                cantidad = venta[2]
+
+                                if producto_id:
+                                    conn.execute(text("""
+                                        UPDATE productos
+                                        SET stock = stock + :q
+                                        WHERE id = :pid
+                                    """), {
+                                        "q": cantidad,
+                                        "pid": producto_id
+                                    })
+
+                                conn.execute(text("""
+                                    DELETE FROM ventas
+                                    WHERE id = :id
+                                """), {"id": venta_id})
+
+                            conn.execute(text("""
+                                DELETE FROM cobros
+                                WHERE venta_grupo = :vg
+                            """), {"vg": venta_grupo})
+
+                        st.success("✅ Venta eliminada y stock devuelto")
+                        st.rerun()
+
+            st.divider()
+            st.subheader("📊 Ranking de vendedores")
+
+            ranking = cobros.groupby("usuario")["total"].sum()
+
+            if not ranking.empty:
+                st.bar_chart(ranking)
 
     except Exception as e:
         st.error(f"Error al leer los reportes: {str(e)}")
-
 
 else:
     st.info("Selecciona un módulo desde la barra lateral")
