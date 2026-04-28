@@ -287,113 +287,115 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                     st.rerun()
 
     with tab2:
-        st.subheader("Usuarios del Sistema")
-        df_usuarios = pd.read_sql("SELECT id, username, rol FROM usuarios ORDER BY username", engine)
-        st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+    st.subheader("Usuarios del Sistema")
 
-        st.divider()
-        st.subheader("Crear Nuevo Usuario")
-        col1, col2, col3 = st.columns(3)
-        with col1: new_user = st.text_input("Nombre de usuario")
-        with col2: new_pass = st.text_input("Contraseña", type="password")
-        with col3: new_rol = st.selectbox("Rol", ["vendedor", "admin"])
-        
-        if st.button("Crear Usuario", type="primary"):
-            if new_user and new_pass:
-                try:
-                    with engine.begin() as conn:
-                        conn.execute(text("""
-                            INSERT INTO usuarios(username, password, rol) VALUES(:u, :p, :r)
-                        """), {"u": new_user, "p": hash_pass(new_pass), "r": new_rol})
-                    st.success(f"✅ Usuario '{new_user}' creado correctamente")
-                    st.rerun()
-                except:
-                    st.error("El usuario ya existe")
-            else:
-                st.warning("Completa todos los campos")
+    df_usuarios = pd.read_sql(
+        "SELECT id, username, rol FROM usuarios ORDER BY username",
+        engine
+    )
 
-# =========================
-# 📊 REPORTES - CON ELIMINACIÓN MÚLTIPLE
-# =========================
+    st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("Crear Nuevo Usuario")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        new_user = st.text_input("Nombre de usuario", key="new_user_input")
+
+    with col2:
+        new_pass = st.text_input("Contraseña", type="password", key="new_pass_input")
+
+    with col3:
+        new_rol = st.selectbox("Rol", ["vendedor", "admin"], key="new_role_input")
+
+    if st.button("Crear Usuario", type="primary"):
+
+        if not new_user or not new_pass:
+            st.warning("Completa todos los campos")
+
+        else:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        INSERT INTO usuarios(username, password, rol)
+                        VALUES(:u, :p, :r)
+                    """), {
+                        "u": new_user,
+                        "p": hash_pass(new_pass),
+                        "r": new_rol
+                    })
+
+                st.success(f"✅ Usuario '{new_user}' creado correctamente")
+                st.rerun()
+
+            except Exception as e:
+                st.error("El usuario ya existe o hubo un error")
 elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes y Gestión de Ventas")
-    
-    st.write("### Diagnóstico de Ventas")
-    
-    if st.button("🔄 Recargar Reportes"):
-        st.rerun()
 
-    try:
-        ventas = pd.read_sql("""
-            SELECT
-                v.id,
-                v.fecha,
-                v.usuario,
-                p.nombre as producto,
-                v.cantidad,
-                v.total,
-                v.ganancia
-            FROM ventas v
-            LEFT JOIN productos p ON v.producto_id = p.id
-            ORDER BY v.fecha DESC
-        """, engine)
-        
-        st.success(f"Total de ventas encontradas: {len(ventas)}")
-        
-        if ventas.empty:
-            st.warning("No hay ventas registradas aún.")
-        else:
-            st.subheader("Selecciona las ventas que deseas eliminar")
-            
-            # Crear columna de selección múltiple
-            ventas = ventas.copy()
-            ventas['Seleccionar'] = False
-            
-            # Mostrar tabla editable
-            edited_df = st.data_editor(
-                ventas[['Seleccionar', 'fecha', 'usuario', 'producto', 'cantidad', 'total']],
-                hide_index=True,
-                column_config={
-                    "Seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
-                    "fecha": st.column_config.DatetimeColumn("Fecha", format="DD/MM HH:mm"),
-                    "total": st.column_config.NumberColumn("Total", format="$%d"),
-                },
-                use_container_width=True
-            )
+    ventas = pd.read_sql("""
+        SELECT
+            v.id AS venta_id,
+            v.fecha,
+            v.usuario,
+            p.nombre AS producto,
+            v.cantidad,
+            v.total,
+            v.ganancia,
+            v.producto_id
+        FROM ventas v
+        LEFT JOIN productos p ON v.producto_id = p.id
+        ORDER BY v.fecha DESC
+    """, engine)
 
-            # Botón para eliminar las seleccionadas
-            if st.button("🗑️ Eliminar Ventas Seleccionadas", type="primary"):
-                selected_rows = edited_df[edited_df['Seleccionar'] == True]
-                
-                if selected_rows.empty:
-                    st.warning("No has seleccionado ninguna venta.")
-                else:
-                    venta_ids = selected_rows.index.tolist()  # IDs originales
-                    
-                    with engine.begin() as conn:
-                        for vid in venta_ids:
-                            # Devolver stock
-                            v = conn.execute(text("SELECT producto_id, cantidad FROM ventas WHERE id = :id"), 
-                                           {"id": vid}).fetchone()
-                            if v:
-                                conn.execute(text("UPDATE productos SET stock = stock + :q WHERE id = :pid"),
-                                           {"q": v[1], "pid": v[0]})
-                            # Eliminar venta
-                            conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": vid})
-                    
-                    st.success(f"Se eliminaron {len(selected_rows)} venta(s) correctamente y se devolvió el stock.")
-                    st.rerun()
+    if ventas.empty:
+        st.warning("No hay ventas registradas")
+    else:
 
-            # Métricas
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
-            with col2:
-                st.metric("Ganancia Total", f"${ventas['ganancia'].sum():,.0f}")
-            with col3:
-                st.metric("Ventas Totales", len(ventas))
+        ventas["Seleccionar"] = False
 
-    except Exception as e:
-        st.error(f"Error al leer las ventas: {str(e)}")
+        edited = st.data_editor(
+            ventas,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Seleccionar": st.column_config.CheckboxColumn("Eliminar"),
+                "fecha": st.column_config.DatetimeColumn("Fecha"),
+                "total": st.column_config.NumberColumn("Total"),
+                "ganancia": st.column_config.NumberColumn("Ganancia"),
+            }
+        )
+
+        if st.button("🗑️ Eliminar seleccionadas", type="primary"):
+
+            seleccionadas = edited[edited["Seleccionar"] == True]
+
+            if seleccionadas.empty:
+                st.warning("No seleccionaste nada")
+            else:
+
+                with engine.begin() as conn:
+                    for _, row in seleccionadas.iterrows():
+
+                        venta_id = row["venta_id"]
+                        producto_id = row["producto_id"]
+                        cantidad = row["cantidad"]
+
+                        # devolver stock
+                        conn.execute(text("""
+                            UPDATE productos
+                            SET stock = stock + :q
+                            WHERE id = :pid
+                        """), {"q": cantidad, "pid": producto_id})
+
+                        # borrar venta REAL
+                        conn.execute(text("""
+                            DELETE FROM ventas WHERE id = :id
+                        """), {"id": venta_id})
+
+                st.success(f"Eliminadas {len(seleccionadas)} ventas")
+                st.rerun()
 else:
     st.info("Selecciona un módulo desde la barra lateral.")
