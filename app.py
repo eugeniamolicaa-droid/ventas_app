@@ -39,21 +39,22 @@ body {background-color: #0e1117; color: white;}
 # 🧠 CONEXIÓN SUPABASE
 # =========================
 from sqlalchemy import create_engine
+import streamlit as st
 
-DB_URL = "postgresql+psycopg2://postgres:Meridda2026@db.ytsfrsogreiebxrquuaf.supabase.co:5432/postgres"
+# =========================
+# 🔌 CONEXIÓN A SUPABASE (POOLER IPV4)
+# =========================
+
+DB_URL = st.secrets["DB_URL"]
 
 engine = create_engine(
     DB_URL,
-    connect_args={
-        "sslmode": "require"
-    },
-    pool_pre_ping=True
+    pool_pre_ping=True,   # evita conexiones muertas
+    pool_recycle=300,     # refresca conexiones viejas
+    pool_size=5,          # conexiones activas
+    max_overflow=10,      # extra si hay demanda
+    echo=False            # ponelo True solo para debug
 )
-try:
-    with engine.connect() as conn:
-        st.success(conn.execute(text("SELECT 1")).fetchone())
-except Exception as e:
-    st.error(e)
 # =========================
 # 🧱 CREAR TABLAS (AUTO)
 # =========================
