@@ -313,18 +313,16 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 st.warning("Completa todos los campos")
 
 # =========================
-# 📊 REPORTES - VERSIÓN FINAL (Solo Admin)
+# 📊 REPORTES - CON ELIMINACIÓN MÚLTIPLE
 # =========================
 elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes y Gestión de Ventas")
-   
+    
     st.write("### Diagnóstico de Ventas")
-   
-    # Botón para recargar
+    
     if st.button("🔄 Recargar Reportes"):
         st.rerun()
 
-    # Mostrar todas las ventas
     try:
         ventas = pd.read_sql("""
             SELECT
@@ -339,31 +337,54 @@ elif menu == "📊 Reportes" and ROL == "admin":
             LEFT JOIN productos p ON v.producto_id = p.id
             ORDER BY v.fecha DESC
         """, engine)
-       
+        
         st.success(f"Total de ventas encontradas: {len(ventas)}")
-       
+        
         if ventas.empty:
-            st.warning("No hay ninguna venta registrada en la base de datos.")
-            st.info("Realiza una venta nueva desde 'Agregar Producto' + 'Carrito' + 'Cobrar' para probar.")
+            st.warning("No hay ventas registradas aún.")
         else:
-            st.subheader("Todas las Ventas Registradas")
+            st.subheader("Selecciona las ventas que deseas eliminar")
             
-            for _, row in ventas.iterrows():
-                col1, col2, col3, col4 = st.columns([3, 2, 2, 1.5])
-                with col1:
-                    st.write(f"**{row['fecha'].strftime('%d/%m %H:%M')}** - {row['usuario']}")
-                with col2:
-                    st.write(f"**{row['producto']}** x {row['cantidad']}")
-                with col3:
-                    st.write(f"${row['total']:,.0f}")
-                with col4:
-                    if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
-                        st.session_state["confirm_delete_venta"] = row["id"]
-                        st.rerun()
-                
-                st.divider()
+            # Crear columna de selección múltiple
+            ventas = ventas.copy()
+            ventas['Seleccionar'] = False
+            
+            # Mostrar tabla editable
+            edited_df = st.data_editor(
+                ventas[['Seleccionar', 'fecha', 'usuario', 'producto', 'cantidad', 'total']],
+                hide_index=True,
+                column_config={
+                    "Seleccionar": st.column_config.CheckboxColumn("Seleccionar", default=False),
+                    "fecha": st.column_config.DatetimeColumn("Fecha", format="DD/MM HH:mm"),
+                    "total": st.column_config.NumberColumn("Total", format="$%d"),
+                },
+                use_container_width=True
+            )
 
-            # Métricas básicas
+            # Botón para eliminar las seleccionadas
+            if st.button("🗑️ Eliminar Ventas Seleccionadas", type="primary"):
+                selected_rows = edited_df[edited_df['Seleccionar'] == True]
+                
+                if selected_rows.empty:
+                    st.warning("No has seleccionado ninguna venta.")
+                else:
+                    venta_ids = selected_rows.index.tolist()  # IDs originales
+                    
+                    with engine.begin() as conn:
+                        for vid in venta_ids:
+                            # Devolver stock
+                            v = conn.execute(text("SELECT producto_id, cantidad FROM ventas WHERE id = :id"), 
+                                           {"id": vid}).fetchone()
+                            if v:
+                                conn.execute(text("UPDATE productos SET stock = stock + :q WHERE id = :pid"),
+                                           {"q": v[1], "pid": v[0]})
+                            # Eliminar venta
+                            conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": vid})
+                    
+                    st.success(f"Se eliminaron {len(selected_rows)} venta(s) correctamente y se devolvió el stock.")
+                    st.rerun()
+
+            # Métricas
             col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
@@ -374,36 +395,5 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
     except Exception as e:
         st.error(f"Error al leer las ventas: {str(e)}")
-
-    # ====================== CONFIRMAR ELIMINACIÓN ======================
-    if "confirm_delete_venta" in st.session_state:
-        vid = st.session_state["confirm_delete_venta"]
-        st.warning("¿Estás seguro de que deseas eliminar esta venta? El stock será devuelto automáticamente.")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Sí, Eliminar Venta", type="primary"):
-                try:
-                    with engine.begin() as conn:
-                        # Recuperar información para devolver stock
-                        v = conn.execute(text("SELECT producto_id, cantidad FROM ventas WHERE id = :id"), 
-                                       {"id": vid}).fetchone()
-                        if v:
-                            # Devolver stock al producto
-                            conn.execute(text("UPDATE productos SET stock = stock + :q WHERE id = :pid"),
-                                       {"q": v[1], "pid": v[0]})
-                            # Eliminar la venta
-                            conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": vid})
-                            
-                    st.success("Venta eliminada correctamente y stock devuelto.")
-                    del st.session_state["confirm_delete_venta"]
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al eliminar la venta: {str(e)}")
-        
-        with col2:
-            if st.button("Cancelar"):
-                del st.session_state["confirm_delete_venta"]
-                st.rerun()
 else:
     st.info("Selecciona un módulo desde la barra lateral.")
