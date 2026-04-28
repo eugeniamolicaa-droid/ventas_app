@@ -18,7 +18,6 @@ st.set_page_config(layout="wide")
 st.markdown("""
 <style>
 body {background-color: #0e1117; color: white;}
-
 .stButton>button {
     height: 60px;
     font-size: 16px;
@@ -27,7 +26,6 @@ body {background-color: #0e1117; color: white;}
     color: white;
     font-weight: bold;
 }
-
 .card {
     padding: 12px;
     border-radius: 12px;
@@ -38,7 +36,7 @@ body {background-color: #0e1117; color: white;}
 """, unsafe_allow_html=True)
 
 # =========================
-# 🔌 CONEXIÓN SUPABASE
+# 🔌 DB SUPABASE
 # =========================
 DB_URL = st.secrets["DB_URL"]
 
@@ -92,9 +90,7 @@ with engine.begin() as conn:
 # 👑 ADMIN DEFAULT
 # =========================
 with engine.begin() as conn:
-    admin = conn.execute(text("""
-        SELECT * FROM usuarios WHERE username='admin'
-    """)).fetchone()
+    admin = conn.execute(text("SELECT * FROM usuarios WHERE username='admin'")).fetchone()
 
     if not admin:
         conn.execute(text("""
@@ -114,12 +110,9 @@ if st.button("Entrar"):
 
     with engine.connect() as conn:
         data = conn.execute(text("""
-            SELECT * FROM usuarios
-            WHERE username=:u AND password=:p
-        """), {
-            "u": user,
-            "p": hash_pass(pwd)
-        }).fetchone()
+        SELECT * FROM usuarios
+        WHERE username=:u AND password=:p
+        """), {"u": user, "p": hash_pass(pwd)}).fetchone()
 
     if data:
         st.session_state["login"] = True
@@ -127,15 +120,15 @@ if st.button("Entrar"):
         st.session_state["rol"] = data[3]
         st.rerun()
     else:
-        st.error("❌ Login incorrecto")
+        st.error("❌ Usuario o clave incorrectos")
 
 if "login" not in st.session_state:
     st.stop()
 
-st.success(f"👤 {st.session_state['user']} | {st.session_state['rol']}")
+st.success(f"👤 {st.session_state['user']} ({st.session_state['rol']})")
 
 # =========================
-# 📦 PRODUCTOS
+# 📦 PRODUCTOS (TODOS VEN)
 # =========================
 df = pd.read_sql("SELECT * FROM productos", engine)
 
@@ -150,6 +143,7 @@ if not df.empty:
 
     for cat in df["categoria"].unique():
         st.subheader(cat)
+
         df_cat = df[df["categoria"] == cat]
 
         for _, row in df_cat.iterrows():
@@ -157,14 +151,23 @@ if not df.empty:
             col1, col2 = st.columns([3, 1])
 
             with col1:
+
+                # 👇 vendedores NO ven costo ni ganancia
+                if st.session_state["rol"] == "admin":
+                    extra = f"💰 Costo: {row['costo']} | Profit: {row['precio'] - row['costo']}"
+                else:
+                    extra = ""
+
                 st.markdown(f"""
                 <div class="card">
-                    <b>{row['nombre']} - {row['variante']}</b><br>
-                    💲 {row['precio']} | Stock: {row['stock']}
+                <b>{row['nombre']} - {row['variante']}</b><br>
+                💲 {row['precio']} | Stock: {row['stock']}<br>
+                {extra}
                 </div>
                 """, unsafe_allow_html=True)
 
             with col2:
+
                 cant = st.number_input("Cant", 1, 100, key=f"c{row['id']}")
 
                 if st.button("Vender", key=f"v{row['id']}"):
@@ -175,14 +178,12 @@ if not df.empty:
                         ganancia = (row["precio"] - row["costo"]) * cant
 
                         with engine.begin() as conn:
+
                             conn.execute(text("""
                                 UPDATE productos
                                 SET stock = stock - :c
                                 WHERE id = :id
-                            """), {
-                                "c": cant,
-                                "id": row["id"]
-                            })
+                            """), {"c": cant, "id": row["id"]})
 
                             conn.execute(text("""
                                 INSERT INTO ventas
@@ -204,60 +205,15 @@ if not df.empty:
                         st.error("❌ Sin stock")
 
 # =========================
-# 🔐 ADMIN PANEL
+# 👑 SOLO ADMIN
 # =========================
 if st.session_state["rol"] == "admin":
 
     st.divider()
     st.header("🔐 Panel Admin")
 
-    # =========================
-    # 📦 CARGAR PRODUCTO / STOCK
-    # =========================
-    st.subheader("📦 Cargar producto / stock")
-
-    c1, c2, c3 = st.columns(3)
-    c4, c5, c6 = st.columns(3)
-
-    categoria = c1.text_input("Categoría")
-    nombre = c2.text_input("Nombre")
-    variante = c3.text_input("Variante")
-
-    precio_venta = c4.number_input("Precio venta", min_value=0.0, step=0.5)
-    costo = c5.number_input("Costo", min_value=0.0, step=0.5)
-
-    stock = c6.number_input("Stock", min_value=0, step=1, format="%d")
-
-    if st.button("➕ Guardar producto"):
-
-        if categoria and nombre and variante:
-
-            profit = precio_venta - costo
-
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    INSERT INTO productos
-                    (categoria,nombre,variante,precio,costo,stock)
-                    VALUES (:c,:n,:v,:p,:co,:s)
-                """), {
-                    "c": categoria,
-                    "n": nombre,
-                    "v": variante,
-                    "p": precio_venta,
-                    "co": costo,
-                    "s": int(stock)
-                })
-
-            st.success(f"✅ Producto guardado | Profit: ${profit:.2f}")
-            st.rerun()
-
-        else:
-            st.error("❌ Completa todos los campos")
-
-    # =========================
     # 👤 USUARIOS
-    # =========================
-    st.subheader("👤 Crear usuario")
+    st.subheader("Crear usuario")
 
     u1, u2, u3 = st.columns(3)
     new_user = u1.text_input("Usuario", key="u")
@@ -267,7 +223,6 @@ if st.session_state["rol"] == "admin":
     if st.button("Crear usuario"):
 
         with engine.begin() as conn:
-
             existe = conn.execute(text("""
                 SELECT * FROM usuarios WHERE username=:u
             """), {"u": new_user}).fetchone()
@@ -287,22 +242,50 @@ if st.session_state["rol"] == "admin":
                 st.success("Usuario creado")
                 st.rerun()
 
-    # =========================
+    # 📦 PRODUCTOS (ADMIN)
+    st.subheader("Agregar producto")
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+
+    categoria = c1.text_input("Categoría")
+    nombre = c2.text_input("Nombre")
+    variante = c3.text_input("Variante")
+    precio = c4.number_input("Precio")
+    costo = c5.number_input("Costo")
+    stock = c6.number_input("Stock", step=1)
+
+    if st.button("Agregar producto"):
+
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO productos
+                (categoria,nombre,variante,precio,costo,stock)
+                VALUES (:c,:n,:v,:p,:co,:s)
+            """), {
+                "c": categoria,
+                "n": nombre,
+                "v": variante,
+                "p": precio,
+                "co": costo,
+                "s": int(stock)
+            })
+
+        st.success("Producto agregado")
+        st.rerun()
+
     # 📊 DASHBOARD
-    # =========================
     st.subheader("📊 Dashboard")
 
     ventas = pd.read_sql("SELECT * FROM ventas", engine)
 
     if not ventas.empty:
-
         ventas["fecha"] = pd.to_datetime(ventas["fecha"])
 
-        st.metric("💰 Total", ventas["total"].sum())
+        st.metric("💰 Total vendido", ventas["total"].sum())
         st.metric("📈 Ganancia", ventas["ganancia"].sum())
 
         st.subheader("Ranking vendedores")
         st.bar_chart(ventas.groupby("usuario")["total"].sum())
 
     else:
-        st.info("Sin ventas todavía")
+        st.info("Sin ventas")
