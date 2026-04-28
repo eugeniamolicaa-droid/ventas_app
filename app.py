@@ -6,6 +6,7 @@ from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from sqlalchemy import create_engine, text
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
@@ -15,7 +16,12 @@ from reportlab.pdfgen import canvas
 # =========================
 # CONFIG / ESTILO
 # =========================
-st.set_page_config(page_title="POINT.MOBILE", layout="wide", page_icon="📱")
+st.set_page_config(
+    page_title="POINT.MOBILE",
+    layout="wide",
+    page_icon="📱",
+    initial_sidebar_state="collapsed"
+)
 
 st.markdown("""
 <style>
@@ -122,12 +128,53 @@ def reset_pagos():
     st.session_state["pago_transferencia"] = 0.0
 
 
+def marcar_fin_dia_descargado():
+    st.session_state["fin_dia_pdf_descargado"] = True
+    st.session_state["mostrar_post_pdf"] = True
+
+
+def auto_collapse_sidebar():
+    components.html(
+        """
+        <script>
+        setTimeout(function() {
+            const doc = window.parent.document;
+            const buttons = Array.from(doc.querySelectorAll('button'));
+            const collapseButton = buttons.find(btn => {
+                const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                return label.includes('close sidebar') ||
+                       label.includes('cerrar') ||
+                       label.includes('collapse') ||
+                       label.includes('sidebar');
+            });
+            const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+            const isExpanded = sidebar && sidebar.getAttribute('aria-expanded') !== 'false';
+            if (collapseButton && isExpanded) {
+                collapseButton.click();
+            }
+        }, 350);
+        </script>
+        """,
+        height=0,
+        width=0
+    )
+
+
 def crear_pdf_fin_dia(resumen, ventas_detalle):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
 
     width, height = A4
     y = height - 2 * cm
+
+    def nueva_pagina():
+        nonlocal y
+        pdf.showPage()
+        y = height - 2 * cm
+
+    def check_y(min_y=2 * cm):
+        if y < min_y:
+            nueva_pagina()
 
     pdf.setFont("Helvetica-Bold", 18)
     pdf.drawString(2 * cm, y, "POINT.MOBILE - FIN DEL DIA")
@@ -138,7 +185,7 @@ def crear_pdf_fin_dia(resumen, ventas_detalle):
 
     y -= 1.2 * cm
     pdf.setFont("Helvetica-Bold", 13)
-    pdf.drawString(2 * cm, y, "Resumen")
+    pdf.drawString(2 * cm, y, "Resumen general")
 
     y -= 0.8 * cm
     pdf.setFont("Helvetica", 11)
@@ -156,37 +203,97 @@ def crear_pdf_fin_dia(resumen, ventas_detalle):
     y -= 0.6 * cm
     pdf.drawString(2 * cm, y, f"Cantidad de ventas: {resumen['cantidad_ventas']}")
 
+    # =========================
+    # RESUMEN POR USUARIO
+    # =========================
     y -= 1.2 * cm
+    check_y()
+
     pdf.setFont("Helvetica-Bold", 13)
-    pdf.drawString(2 * cm, y, "Detalle de ventas")
+    pdf.drawString(2 * cm, y, "Totales por usuario")
 
     y -= 0.8 * cm
-    pdf.setFont("Helvetica-Bold", 9)
-    pdf.drawString(2 * cm, y, "Hora")
-    pdf.drawString(4 * cm, y, "Usuario")
-    pdf.drawString(7 * cm, y, "Total")
-    pdf.drawString(9.5 * cm, y, "Efectivo")
-    pdf.drawString(12 * cm, y, "Transf.")
-    pdf.drawString(15 * cm, y, "Desc.")
+
+    usuarios = (
+        ventas_detalle
+        .groupby("usuario", dropna=False)
+        .agg(
+            ventas=("id", "count"),
+            total=("total", "sum"),
+            efectivo=("efectivo", "sum"),
+            transferencia=("transferencia", "sum"),
+            descuentos=("descuento_monto", "sum")
+        )
+        .reset_index()
+    )
+
+    pdf.setFont("Helvetica-Bold", 8)
+    pdf.drawString(2 * cm, y, "Usuario")
+    pdf.drawString(6 * cm, y, "Ventas")
+    pdf.drawString(8 * cm, y, "Total")
+    pdf.drawString(10.5 * cm, y, "Efectivo")
+    pdf.drawString(13 * cm, y, "Transf.")
+    pdf.drawString(15.5 * cm, y, "Desc.")
 
     pdf.setFont("Helvetica", 8)
 
-    for _, row in ventas_detalle.iterrows():
+    for _, row in usuarios.iterrows():
         y -= 0.5 * cm
+        check_y()
 
-        if y < 2 * cm:
-            pdf.showPage()
-            y = height - 2 * cm
-            pdf.setFont("Helvetica", 8)
+        pdf.drawString(2 * cm, y, str(row["usuario"])[:20])
+        pdf.drawString(6 * cm, y, str(int(row["ventas"])))
+        pdf.drawString(8 * cm, y, f"${row['total']:,.0f}")
+        pdf.drawString(10.5 * cm, y, f"${row['efectivo']:,.0f}")
+        pdf.drawString(13 * cm, y, f"${row['transferencia']:,.0f}")
+        pdf.drawString(15.5 * cm, y, f"${row['descuentos']:,.0f}")
 
-        fecha = pd.to_datetime(row["fecha"]).strftime("%H:%M")
+    # =========================
+    # DETALLE POR USUARIO
+    # =========================
+    y -= 1.2 * cm
+    check_y()
 
-        pdf.drawString(2 * cm, y, fecha)
-        pdf.drawString(4 * cm, y, str(row["usuario"])[:14])
-        pdf.drawString(7 * cm, y, f"${row['total']:,.0f}")
-        pdf.drawString(9.5 * cm, y, f"${row['efectivo']:,.0f}")
-        pdf.drawString(12 * cm, y, f"${row['transferencia']:,.0f}")
-        pdf.drawString(15 * cm, y, f"${row['descuento_monto']:,.0f}")
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(2 * cm, y, "Detalle de ventas por usuario")
+
+    for usuario, df_user in ventas_detalle.groupby("usuario", dropna=False):
+        y -= 1 * cm
+        check_y()
+
+        pdf.setFont("Helvetica-Bold", 11)
+        pdf.drawString(2 * cm, y, f"Usuario: {usuario}")
+
+        y -= 0.6 * cm
+        pdf.setFont("Helvetica-Bold", 8)
+        pdf.drawString(2 * cm, y, "Hora")
+        pdf.drawString(4 * cm, y, "Total")
+        pdf.drawString(6.5 * cm, y, "Efectivo")
+        pdf.drawString(9 * cm, y, "Transf.")
+        pdf.drawString(11.5 * cm, y, "Desc.")
+        pdf.drawString(14 * cm, y, "Tipo desc.")
+
+        pdf.setFont("Helvetica", 8)
+
+        for _, row in df_user.iterrows():
+            y -= 0.5 * cm
+            check_y()
+
+            fecha = pd.to_datetime(row["fecha"]).strftime("%H:%M")
+            pdf.drawString(2 * cm, y, fecha)
+            pdf.drawString(4 * cm, y, f"${row['total']:,.0f}")
+            pdf.drawString(6.5 * cm, y, f"${row['efectivo']:,.0f}")
+            pdf.drawString(9 * cm, y, f"${row['transferencia']:,.0f}")
+            pdf.drawString(11.5 * cm, y, f"${row['descuento_monto']:,.0f}")
+            pdf.drawString(14 * cm, y, str(row["descuento_tipo"])[:18])
+
+        y -= 0.7 * cm
+        check_y()
+
+        pdf.setFont("Helvetica-Bold", 9)
+        pdf.drawString(2 * cm, y, f"Total usuario: ${df_user['total'].sum():,.0f}")
+        pdf.drawString(7 * cm, y, f"Efectivo: ${df_user['efectivo'].sum():,.0f}")
+        pdf.drawString(12 * cm, y, f"Transf.: ${df_user['transferencia'].sum():,.0f}")
 
     pdf.save()
     buffer.seek(0)
@@ -357,7 +464,7 @@ with st.sidebar:
     if ROL == "admin":
         menu_options.extend(["⚙️ Admin", "📊 Reportes"])
 
-    menu = st.radio("Módulos", menu_options, label_visibility="collapsed")
+    menu = st.radio("Módulos", menu_options, label_visibility="collapsed", key="menu_radio")
 
     st.divider()
 
@@ -365,6 +472,8 @@ with st.sidebar:
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
+
+auto_collapse_sidebar()
 
 
 # =========================
@@ -1039,6 +1148,51 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 st.warning("Completa todos los campos")
 
         st.divider()
+        st.subheader("🔑 Cambiar contraseña")
+
+        if df_usuarios.empty:
+            st.info("No hay usuarios")
+        else:
+            usuario_password = st.selectbox(
+                "Usuario",
+                df_usuarios["username"].tolist(),
+                key="select_usuario_password"
+            )
+
+            nueva_password = st.text_input(
+                "Nueva contraseña",
+                type="password",
+                key="nueva_password_usuario"
+            )
+
+            confirmar_password = st.text_input(
+                "Confirmar contraseña",
+                type="password",
+                key="confirmar_password_usuario"
+            )
+
+            if st.button("Actualizar contraseña", type="primary", key="btn_actualizar_password"):
+                if not nueva_password or not confirmar_password:
+                    st.warning("Completa ambos campos de contraseña")
+
+                elif nueva_password != confirmar_password:
+                    st.error("Las contraseñas no coinciden")
+
+                else:
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            UPDATE usuarios
+                            SET password = :p
+                            WHERE username = :u
+                        """), {
+                            "p": hash_pass(nueva_password),
+                            "u": usuario_password
+                        })
+
+                    st.success(f"✅ Contraseña de '{usuario_password}' actualizada correctamente")
+                    st.rerun()
+
+        st.divider()
         st.subheader("🗑️ Eliminar Usuario")
 
         usuarios_eliminables = df_usuarios[df_usuarios["username"] != "admin"]
@@ -1072,6 +1226,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes de Ventas")
 
     if st.button("🔄 Recargar Reportes", key="recargar_reportes"):
+        st.session_state["mostrar_post_pdf"] = False
         st.rerun()
 
     try:
@@ -1113,6 +1268,12 @@ elif menu == "📊 Reportes" and ROL == "admin":
             st.header("🏁 FIN DEL DÍA")
 
             hoy = datetime.now().date()
+            hoy_key = datetime.now().strftime("%Y_%m_%d")
+
+            if st.session_state.get("fin_dia_fecha") != hoy_key:
+                st.session_state["fin_dia_fecha"] = hoy_key
+                st.session_state["fin_dia_pdf_descargado"] = False
+                st.session_state["mostrar_post_pdf"] = False
 
             cobros_hoy = cobros[
                 pd.to_datetime(cobros["fecha"]).dt.date == hoy
@@ -1120,6 +1281,8 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
             if cobros_hoy.empty:
                 st.info("Todavía no hay ventas hoy")
+                st.session_state["fin_dia_pdf_descargado"] = False
+                st.session_state["mostrar_post_pdf"] = False
             else:
                 total_dia = cobros_hoy["total"].sum()
                 efectivo_dia = cobros_hoy["efectivo"].sum()
@@ -1141,6 +1304,34 @@ elif menu == "📊 Reportes" and ROL == "admin":
                 with f4:
                     st.metric("Descuentos hoy", f"${descuentos_dia:,.0f}")
 
+                st.subheader("Totales por usuario del día")
+
+                resumen_usuarios_hoy = (
+                    cobros_hoy
+                    .groupby("usuario", dropna=False)
+                    .agg(
+                        ventas=("id", "count"),
+                        total=("total", "sum"),
+                        efectivo=("efectivo", "sum"),
+                        transferencia=("transferencia", "sum"),
+                        descuentos=("descuento_monto", "sum")
+                    )
+                    .reset_index()
+                )
+
+                st.dataframe(
+                    resumen_usuarios_hoy.rename(columns={
+                        "usuario": "Usuario",
+                        "ventas": "Ventas",
+                        "total": "Total",
+                        "efectivo": "Efectivo",
+                        "transferencia": "Transferencia",
+                        "descuentos": "Descuentos"
+                    }),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
                 resumen_fin_dia = {
                     "total": total_dia,
                     "efectivo": efectivo_dia,
@@ -1151,14 +1342,77 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
                 pdf_buffer = crear_pdf_fin_dia(resumen_fin_dia, cobros_hoy)
 
-                st.download_button(
-                    label="📄 Descargar PDF Fin del Día",
-                    data=pdf_buffer,
-                    file_name=f"fin_del_dia_{datetime.now().strftime('%Y_%m_%d')}.pdf",
-                    mime="application/pdf",
-                    type="primary",
-                    use_container_width=True
-                )
+                col_pdf, col_volver, col_nuevo_dia = st.columns(3)
+
+                with col_pdf:
+                    st.download_button(
+                        label="📄 FIN DEL DÍA - Descargar PDF",
+                        data=pdf_buffer,
+                        file_name=f"fin_del_dia_{datetime.now().strftime('%Y_%m_%d')}.pdf",
+                        mime="application/pdf",
+                        type="primary",
+                        use_container_width=True,
+                        on_click=marcar_fin_dia_descargado,
+                        key=f"descargar_fin_dia_{hoy_key}"
+                    )
+
+                with col_volver:
+                    if st.session_state.get("mostrar_post_pdf", False):
+                        if st.button("⬅️ Volver a Reportes", use_container_width=True, key="volver_reportes_post_pdf"):
+                            st.session_state["mostrar_post_pdf"] = False
+                            st.rerun()
+                    else:
+                        st.button(
+                            "⬅️ Volver a Reportes",
+                            use_container_width=True,
+                            disabled=True,
+                            key="volver_reportes_disabled"
+                        )
+                        st.caption("Disponible luego de descargar PDF")
+
+                with col_nuevo_dia:
+                    nuevo_dia_habilitado = st.session_state.get("fin_dia_pdf_descargado", False)
+
+                    if not nuevo_dia_habilitado:
+                        st.button(
+                            "🌅 NUEVO DÍA",
+                            use_container_width=True,
+                            disabled=True,
+                            key="nuevo_dia_bloqueado"
+                        )
+                        st.caption("Primero descargá el PDF de FIN DEL DÍA")
+
+                    else:
+                        if st.button(
+                            "🌅 NUEVO DÍA",
+                            type="primary",
+                            use_container_width=True,
+                            key="nuevo_dia_confirmado"
+                        ):
+                            grupos_hoy = cobros_hoy["venta_grupo"].dropna().tolist()
+
+                            with engine.begin() as conn:
+                                for grupo in grupos_hoy:
+                                    conn.execute(text("""
+                                        DELETE FROM ventas
+                                        WHERE venta_grupo = :vg
+                                    """), {"vg": grupo})
+
+                                    conn.execute(text("""
+                                        DELETE FROM cobros
+                                        WHERE venta_grupo = :vg
+                                    """), {"vg": grupo})
+
+                            st.session_state["fin_dia_pdf_descargado"] = False
+                            st.session_state["mostrar_post_pdf"] = False
+                            st.session_state["cart"] = []
+                            reset_pagos()
+
+                            st.success("✅ Nuevo día iniciado. Ventas y cobros del día fueron limpiados sin devolver stock.")
+                            st.rerun()
+
+            if st.session_state.get("mostrar_post_pdf", False):
+                st.success("✅ PDF generado/descargado. Podés volver a Reportes o iniciar NUEVO DÍA.")
 
             st.divider()
             st.subheader("🧾 Ventas realizadas")
