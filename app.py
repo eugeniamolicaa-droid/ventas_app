@@ -1,12 +1,15 @@
 import base64
 import hashlib
 import uuid
-
 from datetime import datetime
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.pdfgen import canvas
 
 
 # =========================
@@ -114,6 +117,77 @@ def require_admin():
         st.stop()
 
 
+def crear_pdf_fin_dia(resumen, ventas_detalle):
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+
+    width, height = A4
+    y = height - 2 * cm
+
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(2 * cm, y, "POINT.MOBILE - FIN DEL DIA")
+
+    y -= 1 * cm
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(2 * cm, y, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+    y -= 1.2 * cm
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(2 * cm, y, "Resumen")
+
+    y -= 0.8 * cm
+    pdf.setFont("Helvetica", 11)
+    pdf.drawString(2 * cm, y, f"Venta total: ${resumen['total']:,.0f}")
+
+    y -= 0.6 * cm
+    pdf.drawString(2 * cm, y, f"Efectivo: ${resumen['efectivo']:,.0f}")
+
+    y -= 0.6 * cm
+    pdf.drawString(2 * cm, y, f"Transferencia: ${resumen['transferencia']:,.0f}")
+
+    y -= 0.6 * cm
+    pdf.drawString(2 * cm, y, f"Descuentos: ${resumen['descuentos']:,.0f}")
+
+    y -= 0.6 * cm
+    pdf.drawString(2 * cm, y, f"Cantidad de ventas: {resumen['cantidad_ventas']}")
+
+    y -= 1.2 * cm
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(2 * cm, y, "Detalle de ventas")
+
+    y -= 0.8 * cm
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(2 * cm, y, "Hora")
+    pdf.drawString(4 * cm, y, "Usuario")
+    pdf.drawString(7 * cm, y, "Total")
+    pdf.drawString(9.5 * cm, y, "Efectivo")
+    pdf.drawString(12 * cm, y, "Transf.")
+    pdf.drawString(15 * cm, y, "Desc.")
+
+    pdf.setFont("Helvetica", 8)
+
+    for _, row in ventas_detalle.iterrows():
+        y -= 0.5 * cm
+
+        if y < 2 * cm:
+            pdf.showPage()
+            y = height - 2 * cm
+            pdf.setFont("Helvetica", 8)
+
+        fecha = pd.to_datetime(row["fecha"]).strftime("%H:%M")
+
+        pdf.drawString(2 * cm, y, fecha)
+        pdf.drawString(4 * cm, y, str(row["usuario"])[:14])
+        pdf.drawString(7 * cm, y, f"${row['total']:,.0f}")
+        pdf.drawString(9.5 * cm, y, f"${row['efectivo']:,.0f}")
+        pdf.drawString(12 * cm, y, f"${row['transferencia']:,.0f}")
+        pdf.drawString(15 * cm, y, f"${row['descuento_monto']:,.0f}")
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer
+
+
 # =========================
 # BASE DE DATOS
 # =========================
@@ -166,6 +240,9 @@ with engine.begin() as conn:
             id SERIAL PRIMARY KEY,
             venta_grupo TEXT,
             usuario TEXT,
+            subtotal FLOAT DEFAULT 0,
+            descuento_tipo TEXT DEFAULT 'Sin descuento',
+            descuento_monto FLOAT DEFAULT 0,
             total FLOAT,
             efectivo FLOAT DEFAULT 0,
             transferencia FLOAT DEFAULT 0,
@@ -177,7 +254,12 @@ with engine.begin() as conn:
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen TEXT;"))
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS costo FLOAT DEFAULT 0;"))
     conn.execute(text("ALTER TABLE productos ADD COLUMN IF NOT EXISTS stock INT DEFAULT 0;"))
+
     conn.execute(text("ALTER TABLE ventas ADD COLUMN IF NOT EXISTS venta_grupo TEXT;"))
+
+    conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS subtotal FLOAT DEFAULT 0;"))
+    conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS descuento_tipo TEXT DEFAULT 'Sin descuento';"))
+    conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS descuento_monto FLOAT DEFAULT 0;"))
     conn.execute(text("ALTER TABLE cobros ADD COLUMN IF NOT EXISTS comprobante TEXT;"))
 
 
@@ -230,6 +312,9 @@ if "login" not in st.session_state:
                 if "cart" not in st.session_state:
                     st.session_state["cart"] = []
 
+                if "descuento_tipo" not in st.session_state:
+                    st.session_state["descuento_tipo"] = None
+
                 st.rerun()
             else:
                 st.error("❌ Credenciales incorrectas")
@@ -242,6 +327,9 @@ ROL = st.session_state["rol"]
 
 if "cart" not in st.session_state:
     st.session_state["cart"] = []
+
+if "descuento_tipo" not in st.session_state:
+    st.session_state["descuento_tipo"] = None
 
 
 # =========================
@@ -349,9 +437,6 @@ elif menu == "🛍️ Carrito":
     st.header("🛍️ Carrito")
 
     cart = st.session_state.get("cart", [])
-
-    if "descuento_tipo" not in st.session_state:
-        st.session_state["descuento_tipo"] = None
 
     if not cart:
         st.info("El carrito está vacío")
@@ -517,15 +602,40 @@ elif menu == "🛍️ Carrito":
                                 if stock_actual < item["qty"]:
                                     raise Exception(f"Stock insuficiente para {item['name']}")
 
-                            # Registrar cobro general con total ya descontado
+                            # Registrar cobro general
                             conn.execute(text("""
                                 INSERT INTO cobros
-                                (venta_grupo, usuario, total, efectivo, transferencia, comprobante, fecha)
-                                VALUES (:vg, :user, :total, :efectivo, :transferencia, :comprobante, NOW())
+                                (
+                                    venta_grupo,
+                                    usuario,
+                                    subtotal,
+                                    descuento_tipo,
+                                    descuento_monto,
+                                    total,
+                                    efectivo,
+                                    transferencia,
+                                    comprobante,
+                                    fecha
+                                )
+                                VALUES (
+                                    :vg,
+                                    :user,
+                                    :subtotal,
+                                    :descuento_tipo,
+                                    :descuento_monto,
+                                    :total,
+                                    :efectivo,
+                                    :transferencia,
+                                    :comprobante,
+                                    NOW()
+                                )
                             """), {
                                 "vg": venta_grupo,
                                 "user": USER,
-                                "total": total,
+                                "subtotal": float(subtotal),
+                                "descuento_tipo": descuento_nombre,
+                                "descuento_monto": float(descuento_monto),
+                                "total": float(total),
                                 "efectivo": float(pago_efectivo),
                                 "transferencia": float(pago_transferencia),
                                 "comprobante": comprobante_base64
@@ -570,6 +680,7 @@ elif menu == "🛍️ Carrito":
 
                     except Exception as e:
                         st.error(f"Error al cobrar: {str(e)}")
+
 
 # =========================
 # ⚙️ ADMIN
@@ -842,6 +953,9 @@ elif menu == "📊 Reportes" and ROL == "admin":
                 venta_grupo,
                 fecha,
                 usuario,
+                subtotal,
+                descuento_tipo,
+                descuento_monto,
                 total,
                 efectivo,
                 transferencia,
@@ -852,7 +966,6 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
         if cobros.empty:
             st.warning("No hay ventas registradas todavía")
-
         else:
             col1, col2, col3, col4 = st.columns(4)
 
@@ -866,7 +979,58 @@ elif menu == "📊 Reportes" and ROL == "admin":
                 st.metric("🏦 Transferencia", f"${cobros['transferencia'].sum():,.0f}")
 
             with col4:
-                st.metric("🧾 Ventas", len(cobros))
+                st.metric("🎟️ Descuentos", f"${cobros['descuento_monto'].sum():,.0f}")
+
+            st.divider()
+            st.header("🏁 FIN DEL DÍA")
+
+            hoy = datetime.now().date()
+
+            cobros_hoy = cobros[
+                pd.to_datetime(cobros["fecha"]).dt.date == hoy
+            ].copy()
+
+            if cobros_hoy.empty:
+                st.info("Todavía no hay ventas hoy")
+            else:
+                total_dia = cobros_hoy["total"].sum()
+                efectivo_dia = cobros_hoy["efectivo"].sum()
+                transferencia_dia = cobros_hoy["transferencia"].sum()
+                descuentos_dia = cobros_hoy["descuento_monto"].sum()
+                cantidad_ventas = len(cobros_hoy)
+
+                f1, f2, f3, f4 = st.columns(4)
+
+                with f1:
+                    st.metric("Venta total hoy", f"${total_dia:,.0f}")
+
+                with f2:
+                    st.metric("Efectivo hoy", f"${efectivo_dia:,.0f}")
+
+                with f3:
+                    st.metric("Transferencia hoy", f"${transferencia_dia:,.0f}")
+
+                with f4:
+                    st.metric("Descuentos hoy", f"${descuentos_dia:,.0f}")
+
+                resumen_fin_dia = {
+                    "total": total_dia,
+                    "efectivo": efectivo_dia,
+                    "transferencia": transferencia_dia,
+                    "descuentos": descuentos_dia,
+                    "cantidad_ventas": cantidad_ventas
+                }
+
+                pdf_buffer = crear_pdf_fin_dia(resumen_fin_dia, cobros_hoy)
+
+                st.download_button(
+                    label="📄 Descargar PDF Fin del Día",
+                    data=pdf_buffer,
+                    file_name=f"fin_del_dia_{datetime.now().strftime('%Y_%m_%d')}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True
+                )
 
             st.divider()
             st.subheader("🧾 Ventas realizadas")
@@ -882,17 +1046,28 @@ elif menu == "📊 Reportes" and ROL == "admin":
                 )
 
                 with st.expander(titulo):
+                    st.write("### 💳 Pago y descuentos")
 
-                    st.write("### 💳 Pago")
-                    p1, p2, p3 = st.columns(3)
+                    p1, p2, p3, p4 = st.columns(4)
 
                     with p1:
-                        st.metric("Total", f"${cobro['total']:,.0f}")
+                        st.metric("Subtotal", f"${cobro['subtotal']:,.0f}")
 
                     with p2:
-                        st.metric("Efectivo", f"${cobro['efectivo']:,.0f}")
+                        st.metric("Descuento", f"${cobro['descuento_monto']:,.0f}")
 
                     with p3:
+                        st.metric("Total", f"${cobro['total']:,.0f}")
+
+                    with p4:
+                        st.metric("Tipo", str(cobro["descuento_tipo"]))
+
+                    p5, p6 = st.columns(2)
+
+                    with p5:
+                        st.metric("Efectivo", f"${cobro['efectivo']:,.0f}")
+
+                    with p6:
                         st.metric("Transferencia", f"${cobro['transferencia']:,.0f}")
 
                     if cobro["transferencia"] > 0:
@@ -1015,6 +1190,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
     except Exception as e:
         st.error(f"Error al leer los reportes: {str(e)}")
+
 
 else:
     st.info("Selecciona un módulo desde la barra lateral")
