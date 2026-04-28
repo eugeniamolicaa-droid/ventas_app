@@ -5,49 +5,48 @@ import hashlib
 from sqlalchemy import create_engine, text
 
 # =========================
-# 🔐 SEGURIDAD
+# 🍎 UI GOD MODE
 # =========================
-def hash_pass(p):
-    return hashlib.sha256(p.encode()).hexdigest()
-
-# =========================
-# 🎨 CONFIG
-# =========================
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="SHOP PRO", layout="wide")
 
 st.markdown("""
 <style>
-body {background-color: #0e1117; color: white;}
-.stButton>button {
-    height: 55px;
-    font-size: 15px;
-    border-radius: 10px;
-    background-color: #1f6feb;
+html, body {
+    background: radial-gradient(circle at top, #0b0f1a, #05070d);
     color: white;
-    font-weight: bold;
+    font-family: -apple-system, BlinkMacSystemFont;
 }
+
 .card {
-    padding: 12px;
-    border-radius: 12px;
-    background-color: #161b22;
-    margin-bottom: 10px;
+    background: rgba(255,255,255,0.06);
+    padding: 14px;
+    border-radius: 18px;
+    margin: 10px 0;
+    backdrop-filter: blur(14px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+}
+
+button {
+    border-radius: 12px !important;
 }
 </style>
 """, unsafe_allow_html=True)
+
+# =========================
+# 🔐 SECURITY
+# =========================
+def hash_pass(p):
+    return hashlib.sha256(p.encode()).hexdigest()
 
 # =========================
 # 🔌 DB
 # =========================
 DB_URL = st.secrets["DB_URL"]
 
-engine = create_engine(
-    DB_URL,
-    pool_pre_ping=True,
-    pool_recycle=300
-)
+engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # =========================
-# 🧱 TABLAS
+# 🧱 INIT TABLES
 # =========================
 with engine.begin() as conn:
 
@@ -69,7 +68,7 @@ with engine.begin() as conn:
         precio FLOAT,
         costo FLOAT,
         stock INT,
-        foto TEXT
+        imagen TEXT
     )
     """))
 
@@ -90,260 +89,173 @@ with engine.begin() as conn:
 # =========================
 with engine.begin() as conn:
     admin = conn.execute(text("SELECT * FROM usuarios WHERE username='admin'")).fetchone()
-
     if not admin:
         conn.execute(text("""
-        INSERT INTO usuarios (username,password,rol)
-        VALUES ('admin', :p, 'admin')
+        INSERT INTO usuarios(username,password,rol)
+        VALUES('admin',:p,'admin')
         """), {"p": hash_pass("1234")})
 
 # =========================
 # 🔐 LOGIN
 # =========================
-st.title("📱 Sistema de Ventas PRO")
+st.title("🛍️ SHOP PRO — GOD MODE")
 
-user = st.text_input("Usuario", key="login_user")
-pwd = st.text_input("Clave", type="password", key="login_pass")
+user = st.text_input("Usuario")
+pwd = st.text_input("Clave", type="password")
 
-if st.button("Entrar", key="login_btn"):
-
+if st.button("Entrar"):
     with engine.connect() as conn:
         data = conn.execute(text("""
-            SELECT * FROM usuarios
-            WHERE username=:u AND password=:p
-        """), {"u": user, "p": hash_pass(pwd)}).fetchone()
+        SELECT * FROM usuarios
+        WHERE username=:u AND password=:p
+        """), {"u":user,"p":hash_pass(pwd)}).fetchone()
 
     if data:
         st.session_state["login"] = True
         st.session_state["user"] = data[1]
         st.session_state["rol"] = data[3]
-
-        if "cart" not in st.session_state:
-            st.session_state["cart"] = []
-
+        st.session_state["cart"] = []
         st.rerun()
     else:
-        st.error("❌ Login incorrecto")
+        st.error("Login incorrecto")
 
 if "login" not in st.session_state:
     st.stop()
 
-st.success(f"👤 {st.session_state['user']} | {st.session_state['rol']}")
+USER = st.session_state["user"]
+ROL = st.session_state["rol"]
 
-# =========================
-# 📦 PRODUCTOS
-# =========================
+st.sidebar.success(USER)
+st.sidebar.info(ROL)
+
+menu = st.sidebar.radio("Navegación", ["🛒 Tienda", "🧾 Carrito", "📦 Admin"])
+
 df = pd.read_sql("SELECT * FROM productos", engine)
 
 # =========================
-# 🛒 CARRITO (TODOS)
+# 🛒 TIENDA
 # =========================
-st.sidebar.header("🛒 Carrito")
+if menu == "🛒 Tienda":
 
-if st.session_state["cart"]:
-    total_carrito = 0
+    st.header("🛍️ Productos")
 
-    for i, item in enumerate(st.session_state["cart"]):
-        st.sidebar.write(f"{item['nombre']} x{item['cant']}")
+    for _, r in df.iterrows():
 
-        total_carrito += item["precio"] * item["cant"]
+        st.markdown(f"""
+        <div class="card">
+        <b>{r['nombre']} - {r['variante']}</b><br>
+        💲 {r['precio']} | Stock: {r['stock']}
+        </div>
+        """, unsafe_allow_html=True)
 
-        if st.sidebar.button("❌", key=f"del_{i}"):
-            st.session_state["cart"].pop(i)
-            st.rerun()
+        qty = st.number_input("Cantidad", 1, 20, key=f"q{r['id']}")
 
-    st.sidebar.markdown(f"### 💰 Total: {total_carrito}")
+        if st.button("Agregar al carrito", key=f"a{r['id']}"):
 
-    if st.sidebar.button("🧾 Finalizar compra"):
+            st.session_state["cart"].append({
+                "id": r["id"],
+                "name": r["nombre"],
+                "price": r["precio"],
+                "qty": qty
+            })
 
-        with engine.begin() as conn:
-            for item in st.session_state["cart"]:
+            st.success("Agregado al carrito")
 
-                conn.execute(text("""
-                    UPDATE productos SET stock = stock - :c
-                    WHERE id = :id
-                """), {"c": item["cant"], "id": item["id"]})
+# =========================
+# 🧾 CARRITO (SHOPIFY CORE)
+# =========================
+elif menu == "🧾 Carrito":
 
-                conn.execute(text("""
+    st.header("🧾 Tu carrito")
+
+    cart = st.session_state["cart"]
+
+    if not cart:
+        st.info("Carrito vacío")
+    else:
+
+        total = 0
+
+        for item in cart:
+            subtotal = item["price"] * item["qty"]
+            total += subtotal
+
+            st.write(f"{item['name']} x{item['qty']} = ${subtotal}")
+
+        st.divider()
+        st.subheader(f"TOTAL: ${total}")
+
+        if st.button("💳 FINALIZAR COMPRA"):
+
+            with engine.begin() as conn:
+
+                for item in cart:
+
+                    conn.execute(text("""
+                    UPDATE productos
+                    SET stock = stock - :q
+                    WHERE id=:id
+                    """), {"q":item["qty"],"id":item["id"]})
+
+                    conn.execute(text("""
                     INSERT INTO ventas
                     (producto_id,usuario,cantidad,total,ganancia,fecha)
-                    VALUES (:p,:u,:c,:t,:g,:f)
-                """), {
-                    "p": item["id"],
-                    "u": st.session_state["user"],
-                    "c": item["cant"],
-                    "t": item["precio"] * item["cant"],
-                    "g": (item["precio"] - item["costo"]) * item["cant"],
-                    "f": datetime.now()
-                })
+                    VALUES(:p,:u,:c,:t,:g,:f)
+                    """), {
+                        "p": item["id"],
+                        "u": USER,
+                        "c": item["qty"],
+                        "t": item["price"] * item["qty"],
+                        "g": item["price"] * item["qty"] * 0.3,
+                        "f": datetime.now()
+                    })
 
-        st.session_state["cart"] = []
-        st.success("✅ Compra realizada")
-        st.rerun()
-
-else:
-    st.sidebar.info("Carrito vacío")
-
-# =========================
-# 🔍 BUSCAR
-# =========================
-busqueda = st.text_input("🔍 Buscar producto", key="search")
-
-if busqueda:
-    df = df[df["nombre"].str.contains(busqueda, case=False)]
-
-# =========================
-# 🛍️ PRODUCTOS + AGREGAR CARRITO
-# =========================
-st.header("🛍️ Productos")
-
-if not df.empty:
-
-    for _, row in df.iterrows():
-
-        col1, col2, col3 = st.columns([3, 1, 1])
-
-        with col1:
-            st.markdown(f"""
-            <div class="card">
-                <b>{row['nombre']} - {row['variante']}</b><br>
-                💲 {row['precio']} | Stock: {row['stock']}
-            </div>
-            """, unsafe_allow_html=True)
-
-            if row.get("foto"):
-                st.image(row["foto"], width=120)
-
-        with col2:
-            cant = st.number_input(
-                "Cant",
-                1, 100,
-                key=f"cant_{row['id']}"
-            )
-
-        with col3:
-            if st.button("🛒 Agregar", key=f"add_{row['id']}"):
-
-                st.session_state["cart"].append({
-                    "id": row["id"],
-                    "nombre": row["nombre"],
-                    "precio": row["precio"],
-                    "costo": row["costo"],
-                    "cant": cant
-                })
-
-                st.success("Agregado al carrito")
-                st.rerun()
-
-# =========================
-# 🔐 ADMIN PANEL
-# =========================
-if st.session_state["rol"] == "admin":
-
-    st.subheader("👥 Gestionar usuarios")
-
-usuarios = pd.read_sql("SELECT id, username, rol FROM usuarios", engine)
-
-for _, u in usuarios.iterrows():
-
-    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-
-    with col1:
-        st.write(f"👤 {u['username']}")
-
-    with col2:
-        nuevo_rol = st.selectbox(
-            "Rol",
-            ["admin", "vendedor"],
-            index=0 if u["rol"] == "admin" else 1,
-            key=f"role_{u['id']}"
-        )
-
-        if st.button("💾 Cambiar", key=f"save_{u['id']}"):
-            with engine.begin() as conn:
-                conn.execute(text("""
-                    UPDATE usuarios
-                    SET rol = :r
-                    WHERE id = :id
-                """), {"r": nuevo_rol, "id": u["id"]})
-
-            st.success("Rol actualizado")
+            st.session_state["cart"] = []
+            st.success("Compra realizada")
             st.rerun()
 
-    with col4:
-        if u["username"] != "admin":  # protección básica
+# =========================
+# 👑 ADMIN GOD MODE
+# =========================
+elif menu == "📦 Admin" and ROL == "admin":
 
-            if st.button("🗑️", key=f"del_{u['id']}"):
-                with engine.begin() as conn:
-                    conn.execute(text("""
-                        DELETE FROM usuarios WHERE id=:id
-                    """), {"id": u["id"]})
+    st.header("👑 PANEL DIOS")
 
-                st.warning("Usuario eliminado")
-                st.rerun()
+    users = pd.read_sql("SELECT id,username,rol FROM usuarios", engine)
+    st.subheader("Usuarios")
+    st.dataframe(users)
 
-    # =========================
-    # 👤 USUARIOS
-    # =========================
     st.subheader("Crear usuario")
 
-    u1, u2, u3 = st.columns(3)
+    u,p,r = st.columns(3)
+    nu = u.text_input("user")
+    np = p.text_input("pass", type="password")
+    nr = r.selectbox("rol",["admin","vendedor"])
 
-    new_user = u1.text_input("Usuario", key="admin_user")
-    new_pass = u2.text_input("Clave", type="password", key="admin_pass")
-    new_rol = u3.selectbox("Rol", ["admin", "vendedor"], key="admin_role")
-
-    if st.button("Crear usuario", key="create_user"):
-
+    if st.button("Crear"):
         with engine.begin() as conn:
             conn.execute(text("""
-                INSERT INTO usuarios (username,password,rol)
-                VALUES (:u,:p,:r)
-            """), {
-                "u": new_user,
-                "p": hash_pass(new_pass),
-                "r": new_rol
-            })
+            INSERT INTO usuarios(username,password,rol)
+            VALUES(:u,:p,:r)
+            """), {"u":nu,"p":hash_pass(np),"r":nr})
 
         st.success("Usuario creado")
-        st.rerun()
 
-    # =========================
-    # 📦 PRODUCTOS (CON FOTO REAL)
-    # =========================
-    st.subheader("📦 Agregar producto")
+    st.subheader("Eliminar usuario")
 
-    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    delu = st.selectbox("usuario", users["username"])
 
-    categoria = c1.text_input("Categoría", key="cat")
-    nombre = c2.text_input("Nombre", key="name")
-    variante = c3.text_input("Variante", key="var")
-    precio = c4.number_input("Precio", key="price")
-    costo = c5.number_input("Costo", key="cost")
-    stock = c6.number_input("Stock", step=1, key="stock")
+    if st.button("Eliminar"):
+        if delu != "admin":
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM usuarios WHERE username=:u"), {"u":delu})
+            st.success("Eliminado")
 
-    foto = c7.file_uploader("📸 Foto", type=["png", "jpg", "jpeg"])
+    st.subheader("📊 Dashboard")
 
-    if st.button("Agregar producto", key="add_product"):
+    ventas = pd.read_sql("SELECT * FROM ventas", engine)
 
-        foto_bytes = None
-        if foto:
-            foto_bytes = foto.getvalue()
-
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO productos
-                (categoria,nombre,variante,precio,costo,stock,foto)
-                VALUES (:c,:n,:v,:p,:co,:s,:f)
-            """), {
-                "c": categoria,
-                "n": nombre,
-                "v": variante,
-                "p": precio,
-                "co": costo,
-                "s": int(stock),
-                "f": str(foto_bytes) if foto_bytes else None
-            })
-
-        st.success("Producto agregado")
-        st.rerun()
+    if not ventas.empty:
+        st.metric("Ventas", ventas["total"].sum())
+        st.metric("Ganancia", ventas["ganancia"].sum())
+        st.bar_chart(ventas.groupby("usuario")["total"].sum())
