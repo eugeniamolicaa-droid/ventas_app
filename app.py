@@ -240,8 +240,47 @@ if not df.empty:
 # =========================
 if st.session_state["rol"] == "admin":
 
-    st.divider()
-    st.header("🔐 Admin")
+    st.subheader("👥 Gestionar usuarios")
+
+usuarios = pd.read_sql("SELECT id, username, rol FROM usuarios", engine)
+
+for _, u in usuarios.iterrows():
+
+    col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+
+    with col1:
+        st.write(f"👤 {u['username']}")
+
+    with col2:
+        nuevo_rol = st.selectbox(
+            "Rol",
+            ["admin", "vendedor"],
+            index=0 if u["rol"] == "admin" else 1,
+            key=f"role_{u['id']}"
+        )
+
+        if st.button("💾 Cambiar", key=f"save_{u['id']}"):
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    UPDATE usuarios
+                    SET rol = :r
+                    WHERE id = :id
+                """), {"r": nuevo_rol, "id": u["id"]})
+
+            st.success("Rol actualizado")
+            st.rerun()
+
+    with col4:
+        if u["username"] != "admin":  # protección básica
+
+            if st.button("🗑️", key=f"del_{u['id']}"):
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        DELETE FROM usuarios WHERE id=:id
+                    """), {"id": u["id"]})
+
+                st.warning("Usuario eliminado")
+                st.rerun()
 
     # =========================
     # 👤 USUARIOS
