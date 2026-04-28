@@ -4,6 +4,12 @@ from datetime import datetime
 import hashlib
 from sqlalchemy import create_engine, text
 
+engine = create_engine(
+    st.secrets["DB_URL"],
+    connect_args={"sslmode": "require"},
+    pool_pre_ping=True
+)
+
 # =========================
 # 🔐 FUNCIONES
 # =========================
