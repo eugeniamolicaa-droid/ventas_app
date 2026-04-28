@@ -43,8 +43,6 @@ st.markdown("""
         font-weight: 600;
         font-size: 15px;
     }
-    
-    .sidebar .css-1d391kg { background: #0f1117; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,9 +59,10 @@ DB_URL = st.secrets["DB_URL"]
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # =========================
-# 🧱 CREACIÓN DE TABLAS
+# 🧱 CREACIÓN Y ACTUALIZACIÓN DE TABLAS (CORREGIDO)
 # =========================
 with engine.begin() as conn:
+    # Tabla de usuarios
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS usuarios(
         id SERIAL PRIMARY KEY,
@@ -71,7 +70,8 @@ with engine.begin() as conn:
         password TEXT NOT NULL,
         rol TEXT NOT NULL
     )"""))
-    
+
+    # Tabla de productos
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS productos(
         id SERIAL PRIMARY KEY,
@@ -83,7 +83,14 @@ with engine.begin() as conn:
         stock INT DEFAULT 0,
         imagen TEXT
     )"""))
-    
+
+    # Agregar columna 'imagen' si no existe (SOLUCIÓN AL ERROR)
+    conn.execute(text("""
+    ALTER TABLE productos 
+    ADD COLUMN IF NOT EXISTS imagen TEXT;
+    """))
+
+    # Tabla de ventas
     conn.execute(text("""
     CREATE TABLE IF NOT EXISTS ventas(
         id SERIAL PRIMARY KEY,
@@ -95,7 +102,9 @@ with engine.begin() as conn:
         fecha TIMESTAMP
     )"""))
 
-# Admin por defecto
+# =========================
+# 👑 USUARIO ADMIN POR DEFECTO
+# =========================
 with engine.begin() as conn:
     if not conn.execute(text("SELECT 1 FROM usuarios WHERE username='admin'")).fetchone():
         conn.execute(text("""
@@ -134,7 +143,7 @@ if "login" not in st.session_state:
     st.stop()
 
 # =========================
-# DATOS DE SESIÓN
+# SESIÓN ACTIVA
 # =========================
 USER = st.session_state["user"]
 ROL = st.session_state["rol"]
@@ -154,7 +163,7 @@ with st.sidebar:
     menu = st.radio("Módulos", menu_options, label_visibility="collapsed")
     
     st.divider()
-    if st.button("🚪 Cerrar Sesión", use_container_width=True, type="secondary"):
+    if st.button("🚪 Cerrar Sesión", use_container_width=True):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
@@ -169,7 +178,7 @@ if menu == "🛒 POS":
     st.header("🛒 Punto de Venta")
     
     if df_productos.empty:
-        st.warning("No hay productos cargados. El administrador debe agregarlos.")
+        st.warning("No hay productos cargados aún.")
     else:
         cols = st.columns(3)
         for idx, row in df_productos.iterrows():
@@ -193,7 +202,7 @@ if menu == "🛒 POS":
                         "price": float(row["precio"]),
                         "qty": int(qty)
                     })
-                    st.toast(f"✅ {row['nombre']} agregado al carrito", icon="🛒")
+                    st.toast(f"✅ {row['nombre']} agregado", icon="🛒")
                     st.rerun()
 
 # =========================
@@ -211,9 +220,11 @@ elif menu == "🛍️ Carrito":
         for i, item in enumerate(cart):
             subtotal = item["price"] * item["qty"]
             col1, col2, col3 = st.columns([5, 2, 1])
-            with col1: st.write(f"**{item['name']}** × {item['qty']}")
-            with col2: st.write(f"${subtotal:,.0f}")
-            with col3: 
+            with col1:
+                st.write(f"**{item['name']}** × {item['qty']}")
+            with col2:
+                st.write(f"${subtotal:,.0f}")
+            with col3:
                 if st.button("🗑️", key=f"rm_{i}"):
                     cart.pop(i)
                     st.rerun()
@@ -242,35 +253,37 @@ elif menu == "🛍️ Carrito":
             st.rerun()
 
 # =========================
-# ⚙️ ADMIN - GESTIÓN COMPLETA
+# ⚙️ ADMIN
 # =========================
 elif menu == "⚙️ Admin" and ROL == "admin":
     st.header("⚙️ Administración")
     
     tab1, tab2 = st.tabs(["📦 Productos", "👥 Usuarios"])
     
-    # ====================== PRODUCTOS ======================
+    # ====================== TAB PRODUCTOS ======================
     with tab1:
         st.subheader("Agregar Nuevo Producto")
-        with st.form("form_producto"):
+        
+        with st.form("form_producto", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
                 nombre = st.text_input("Nombre del Producto *")
                 categoria = st.text_input("Categoría")
-                variante = st.text_input("Variante")
+                variante = st.text_input("Variante (color, talle, etc.)")
             with col2:
                 precio = st.number_input("Precio de Venta ($)", min_value=0.0, step=100.0)
                 costo = st.number_input("Costo ($)", min_value=0.0, step=100.0)
                 stock = st.number_input("Stock Inicial", min_value=0, value=10)
             
-            imagen = st.file_uploader("Foto del producto (opcional)", type=["jpg","jpeg","png"])
+            imagen = st.file_uploader("📸 Foto del producto", type=["jpg", "jpeg", "png"])
             
-            if st.form_submit_button("Guardar Producto", type="primary"):
+            if st.form_submit_button("💾 Guardar Producto", type="primary"):
                 if nombre and precio > 0:
                     img_path = None
                     if imagen:
                         os.makedirs("imagenes_productos", exist_ok=True)
-                        img_path = f"imagenes_productos/{datetime.now().strftime('%Y%m%d_%H%M%S')}_{imagen.name}"
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        img_path = f"imagenes_productos/{timestamp}_{imagen.name}"
                         with open(img_path, "wb") as f:
                             f.write(imagen.getbuffer())
                     
@@ -279,14 +292,21 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                             INSERT INTO productos (categoria, nombre, variante, precio, costo, stock, imagen)
                             VALUES (:cat, :nom, :var, :pre, :cos, :sto, :img)
                         """), {
-                            "cat": categoria, "nom": nombre, "var": variante,
-                            "pre": precio, "cos": costo, "sto": stock, "img": img_path
+                            "cat": categoria,
+                            "nom": nombre,
+                            "var": variante,
+                            "pre": precio,
+                            "cos": costo,
+                            "sto": stock,
+                            "img": img_path
                         })
-                    st.success("Producto agregado correctamente", icon="✅")
+                    
+                    st.success("✅ Producto guardado correctamente", icon="🎉")
                     st.rerun()
                 else:
-                    st.error("Nombre y precio son obligatorios")
+                    st.error("❌ Nombre y precio son obligatorios")
         
+        # Lista de productos
         st.subheader("Productos Registrados")
         if not df_productos.empty:
             for _, row in df_productos.iterrows():
@@ -296,19 +316,18 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 with col2:
                     st.write(f"${row['precio']:,.0f} | Stock: **{row['stock']}**")
                 with col3:
-                    if st.button("Eliminar", key=f"delprod_{row['id']}"):
+                    if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
                         with engine.begin() as conn:
                             conn.execute(text("DELETE FROM productos WHERE id = :id"), {"id": row["id"]})
                         st.success("Producto eliminado")
                         st.rerun()
         else:
-            st.info("No hay productos registrados aún.")
+            st.info("Aún no hay productos registrados.")
 
-    # ====================== USUARIOS ======================
+    # ====================== TAB USUARIOS ======================
     with tab2:
         st.subheader("Gestión de Usuarios")
         
-        # Lista de usuarios
         df_usuarios = pd.read_sql("SELECT id, username, rol FROM usuarios ORDER BY username", engine)
         st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
         
@@ -331,12 +350,12 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                             INSERT INTO usuarios(username, password, rol)
                             VALUES(:u, :p, :r)
                         """), {"u": new_user, "p": hash_pass(new_pass), "r": new_rol})
-                    st.success(f"Usuario '{new_user}' creado correctamente", icon="✅")
+                    st.success(f"Usuario '{new_user}' creado correctamente ✅")
                     st.rerun()
-                except Exception as e:
-                    st.error("Error: El usuario ya existe")
+                except:
+                    st.error("Error: El nombre de usuario ya existe")
             else:
-                st.warning("Completa todos los campos")
+                st.warning("Completa usuario y contraseña")
 
 # =========================
 # 💰 CAJA
