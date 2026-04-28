@@ -350,10 +350,15 @@ elif menu == "🛍️ Carrito":
 
     cart = st.session_state.get("cart", [])
 
+    if "descuento_tipo" not in st.session_state:
+        st.session_state["descuento_tipo"] = None
+
     if not cart:
         st.info("El carrito está vacío")
+        st.session_state["descuento_tipo"] = None
+
     else:
-        total = sum(item["price"] * item["qty"] for item in cart)
+        subtotal = sum(item["price"] * item["qty"] for item in cart)
 
         for i, item in enumerate(cart):
             col1, col2, col3 = st.columns([5, 2, 1])
@@ -370,7 +375,60 @@ elif menu == "🛍️ Carrito":
                     st.rerun()
 
         st.divider()
-        st.subheader(f"Total: ${total:,.0f}")
+
+        st.subheader("🎟️ Descuentos")
+
+        col_desc1, col_desc2, col_desc3 = st.columns(3)
+
+        with col_desc1:
+            if st.button("🎁 BONIFICACIÓN 10%", use_container_width=True, key="desc_bonificacion"):
+                st.session_state["descuento_tipo"] = "bonificacion"
+                st.rerun()
+
+        with col_desc2:
+            if ROL == "admin":
+                if st.button("👥 EMPLEADOS 20%", use_container_width=True, key="desc_empleados"):
+                    st.session_state["descuento_tipo"] = "empleados"
+                    st.rerun()
+            else:
+                st.button(
+                    "👥 EMPLEADOS 20%",
+                    use_container_width=True,
+                    key="desc_empleados_bloqueado",
+                    disabled=True
+                )
+                st.caption("Solo admin")
+
+        with col_desc3:
+            if st.button("❌ Quitar descuento", use_container_width=True, key="quitar_descuento"):
+                st.session_state["descuento_tipo"] = None
+                st.rerun()
+
+        descuento_tipo = st.session_state.get("descuento_tipo")
+
+        if descuento_tipo == "bonificacion":
+            descuento_porcentaje = 0.10
+            descuento_nombre = "BONIFICACIÓN 10%"
+        elif descuento_tipo == "empleados":
+            descuento_porcentaje = 0.20
+            descuento_nombre = "EMPLEADOS 20%"
+        else:
+            descuento_porcentaje = 0.0
+            descuento_nombre = "Sin descuento"
+
+        descuento_monto = subtotal * descuento_porcentaje
+        total = subtotal - descuento_monto
+
+        col_total1, col_total2, col_total3 = st.columns(3)
+
+        with col_total1:
+            st.metric("Subtotal", f"${subtotal:,.0f}")
+
+        with col_total2:
+            st.metric(descuento_nombre, f"-${descuento_monto:,.0f}")
+
+        with col_total3:
+            st.metric("Total final", f"${total:,.0f}")
 
         st.markdown("### 💳 Forma de pago")
 
@@ -381,7 +439,7 @@ elif menu == "🛍️ Carrito":
                 "💵 Efectivo",
                 min_value=0.0,
                 max_value=float(total),
-                value=0.0,
+                value=float(total),
                 step=100.0,
                 key="pago_efectivo"
             )
@@ -422,6 +480,7 @@ elif menu == "🛍️ Carrito":
         with colb1:
             if st.button("🧹 Vaciar carrito", use_container_width=True, key="vaciar_carrito"):
                 st.session_state["cart"] = []
+                st.session_state["descuento_tipo"] = None
                 st.rerun()
 
         with colb2:
@@ -458,7 +517,7 @@ elif menu == "🛍️ Carrito":
                                 if stock_actual < item["qty"]:
                                     raise Exception(f"Stock insuficiente para {item['name']}")
 
-                            # Registrar cobro total de la venta
+                            # Registrar cobro general con total ya descontado
                             conn.execute(text("""
                                 INSERT INTO cobros
                                 (venta_grupo, usuario, total, efectivo, transferencia, comprobante, fecha)
@@ -472,7 +531,7 @@ elif menu == "🛍️ Carrito":
                                 "comprobante": comprobante_base64
                             })
 
-                            # Registrar productos vendidos
+                            # Registrar productos vendidos distribuyendo el descuento proporcionalmente
                             for item in cart:
                                 conn.execute(text("""
                                     UPDATE productos
@@ -483,8 +542,13 @@ elif menu == "🛍️ Carrito":
                                     "id": item["id"]
                                 })
 
-                                total_item = item["price"] * item["qty"]
-                                ganancia_item = (item["price"] - item["cost"]) * item["qty"]
+                                item_subtotal = item["price"] * item["qty"]
+                                proporcion = item_subtotal / subtotal if subtotal > 0 else 0
+                                item_descuento = descuento_monto * proporcion
+                                total_item = item_subtotal - item_descuento
+
+                                costo_item = item["cost"] * item["qty"]
+                                ganancia_item = total_item - costo_item
 
                                 conn.execute(text("""
                                     INSERT INTO ventas
@@ -500,6 +564,7 @@ elif menu == "🛍️ Carrito":
                                 })
 
                         st.session_state["cart"] = []
+                        st.session_state["descuento_tipo"] = None
                         st.success("✅ Venta completada exitosamente")
                         st.rerun()
 
@@ -877,42 +942,71 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
                     st.divider()
 
-                    if st.button("🗑️ Eliminar esta venta y devolver stock", key=f"del_venta_grupo_{venta_grupo}"):
+                    st.markdown("### 🧹 Acciones sobre esta venta")
 
-                        with engine.begin() as conn:
-                            ventas_grupo = conn.execute(text("""
-                                SELECT id, producto_id, cantidad
-                                FROM ventas
-                                WHERE venta_grupo = :vg
-                            """), {"vg": venta_grupo}).fetchall()
+col_accion1, col_accion2 = st.columns(2)
 
-                            for venta in ventas_grupo:
-                                venta_id = venta[0]
-                                producto_id = venta[1]
-                                cantidad = venta[2]
+with col_accion1:
+    if st.button(
+        "↩️ Anular y devolver stock",
+        key=f"anular_devolver_{venta_grupo}"
+    ):
 
-                                if producto_id:
-                                    conn.execute(text("""
-                                        UPDATE productos
-                                        SET stock = stock + :q
-                                        WHERE id = :pid
-                                    """), {
-                                        "q": cantidad,
-                                        "pid": producto_id
-                                    })
+        with engine.begin() as conn:
+            ventas_grupo = conn.execute(text("""
+                SELECT id, producto_id, cantidad
+                FROM ventas
+                WHERE venta_grupo = :vg
+            """), {"vg": venta_grupo}).fetchall()
 
-                                conn.execute(text("""
-                                    DELETE FROM ventas
-                                    WHERE id = :id
-                                """), {"id": venta_id})
+            for venta in ventas_grupo:
+                venta_id = venta[0]
+                producto_id = venta[1]
+                cantidad = venta[2]
 
-                            conn.execute(text("""
-                                DELETE FROM cobros
-                                WHERE venta_grupo = :vg
-                            """), {"vg": venta_grupo})
+                if producto_id:
+                    conn.execute(text("""
+                        UPDATE productos
+                        SET stock = stock + :q
+                        WHERE id = :pid
+                    """), {
+                        "q": cantidad,
+                        "pid": producto_id
+                    })
 
-                        st.success("✅ Venta eliminada y stock devuelto")
-                        st.rerun()
+                conn.execute(text("""
+                    DELETE FROM ventas
+                    WHERE id = :id
+                """), {"id": venta_id})
+
+            conn.execute(text("""
+                DELETE FROM cobros
+                WHERE venta_grupo = :vg
+            """), {"vg": venta_grupo})
+
+        st.success("✅ Venta anulada y stock devuelto")
+        st.rerun()
+
+
+with col_accion2:
+    if st.button(
+        "🗑️ Eliminar sin devolver stock",
+        key=f"eliminar_sin_stock_{venta_grupo}"
+    ):
+
+        with engine.begin() as conn:
+            conn.execute(text("""
+                DELETE FROM ventas
+                WHERE venta_grupo = :vg
+            """), {"vg": venta_grupo})
+
+            conn.execute(text("""
+                DELETE FROM cobros
+                WHERE venta_grupo = :vg
+            """), {"vg": venta_grupo})
+
+        st.success("✅ Venta eliminada sin modificar stock")
+        st.rerun()
 
             st.divider()
             st.subheader("📊 Ranking de vendedores")
