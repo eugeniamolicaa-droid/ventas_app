@@ -189,13 +189,12 @@ elif menu == "🛍️ Carrito":
             st.rerun()
 
 # =========================
-# ⚙️ ADMIN - COMPLETO Y CORREGIDO
+# ⚙️ ADMIN
 # =========================
 elif menu == "⚙️ Admin" and ROL == "admin":
     st.header("⚙️ Administración")
     tab1, tab2 = st.tabs(["📦 Productos", "👥 Usuarios"])
     
-    # ====================== TAB PRODUCTOS ======================
     with tab1:
         st.subheader("Agregar Nuevo Producto")
         with st.form("nuevo_producto", clear_on_submit=True):
@@ -247,21 +246,21 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                         st.success("Producto eliminado")
                         st.rerun()
 
-        # Editar Producto
+        # Edición de producto
         if "edit_product_id" in st.session_state:
             pid = st.session_state["edit_product_id"]
-            prod = pd.read_sql(f"SELECT * FROM productos WHERE id = {pid}", engine).iloc[0]
+            prod = pd.read_sql(f"SELECT * FROM productos WHERE id={pid}", engine).iloc[0]
             
             st.subheader(f"Editando: {prod['nombre']}")
             with st.form("editar_producto"):
                 col1, col2 = st.columns(2)
                 with col1:
                     e_nombre = st.text_input("Nombre", value=prod['nombre'])
-                    e_categoria = st.text_input("Categoría", value=prod.get('categoria', ''))
-                    e_variante = st.text_input("Variante", value=prod.get('variante', ''))
+                    e_categoria = st.text_input("Categoría", value=prod.get('categoria',''))
+                    e_variante = st.text_input("Variante", value=prod.get('variante',''))
                 with col2:
                     e_precio = st.number_input("Precio", value=float(prod['precio']))
-                    e_costo = st.number_input("Costo", value=float(prod.get('costo', 0)))
+                    e_costo = st.number_input("Costo", value=float(prod.get('costo',0)))
                     e_stock = st.number_input("Stock", value=int(prod['stock']))
                 
                 if prod.get('imagen') and os.path.exists(str(prod['imagen'])):
@@ -284,10 +283,9 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                                "pre": e_precio, "cos": e_costo, "sto": e_stock,
                                "img": img_path, "id": pid})
                     del st.session_state["edit_product_id"]
-                    st.success("Producto actualizado correctamente")
+                    st.success("Producto actualizado")
                     st.rerun()
 
-    # ====================== TAB USUARIOS (CORREGIDO) ======================
     with tab2:
         st.subheader("Usuarios del Sistema")
         df_usuarios = pd.read_sql("SELECT id, username, rol FROM usuarios ORDER BY username", engine)
@@ -296,34 +294,131 @@ elif menu == "⚙️ Admin" and ROL == "admin":
         st.divider()
         st.subheader("Crear Nuevo Usuario")
         col1, col2, col3 = st.columns(3)
-        with col1:
-            new_user = st.text_input("Nombre de usuario")
-        with col2:
-            new_pass = st.text_input("Contraseña", type="password")
-        with col3:
-            new_rol = st.selectbox("Rol", ["vendedor", "admin"])
+        with col1: new_user = st.text_input("Nombre de usuario")
+        with col2: new_pass = st.text_input("Contraseña", type="password")
+        with col3: new_rol = st.selectbox("Rol", ["vendedor", "admin"])
         
         if st.button("Crear Usuario", type="primary"):
             if new_user and new_pass:
                 try:
                     with engine.begin() as conn:
                         conn.execute(text("""
-                            INSERT INTO usuarios(username, password, rol) 
-                            VALUES(:u, :p, :r)
+                            INSERT INTO usuarios(username, password, rol) VALUES(:u, :p, :r)
                         """), {"u": new_user, "p": hash_pass(new_pass), "r": new_rol})
                     st.success(f"✅ Usuario '{new_user}' creado correctamente")
                     st.rerun()
-                except Exception as e:
-                    st.error("El nombre de usuario ya existe")
+                except:
+                    st.error("El usuario ya existe")
             else:
-                st.warning("Por favor completa usuario y contraseña")
+                st.warning("Completa todos los campos")
 
 # =========================
-# 📊 REPORTES (Placeholder)
+# 📊 REPORTES FUNCIONALES - SOLO ADMIN
 # =========================
 elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes y Gestión de Ventas")
-    st.info("La sección de Reportes se completará en la siguiente actualización.")
+    
+    # Filtros
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        fecha_desde = st.date_input("Desde", value=date.today())
+    with col2:
+        fecha_hasta = st.date_input("Hasta", value=date.today())
+    with col3:
+        try:
+            vendedores = ["Todos"] + pd.read_sql("SELECT DISTINCT usuario FROM ventas", engine)['usuario'].tolist()
+        except:
+            vendedores = ["Todos"]
+        vendedor_filtro = st.selectbox("Vendedor", vendedores)
+
+    # Consulta segura
+    query = """
+        SELECT v.id, v.fecha, v.usuario, p.nombre as producto, 
+               v.cantidad, v.total, v.ganancia
+        FROM ventas v 
+        LEFT JOIN productos p ON v.producto_id = p.id 
+        WHERE DATE(v.fecha) BETWEEN :desde AND :hasta
+    """
+    params = {"desde": fecha_desde, "hasta": fecha_hasta}
+
+    if vendedor_filtro != "Todos":
+        query += " AND v.usuario = :vendedor"
+        params["vendedor"] = vendedor_filtro
+
+    try:
+        ventas = pd.read_sql(query + " ORDER BY v.fecha DESC", engine, params=params)
+    except:
+        ventas = pd.DataFrame()
+
+    # Métricas
+    if not ventas.empty:
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.metric("Total Vendido", f"${ventas['total'].sum():,.0f}")
+        with c2: st.metric("Ganancia Estimada", f"${ventas['ganancia'].sum():,.0f}")
+        with c3: st.metric("N° de Ventas", len(ventas))
+        with c4: st.metric("Unidades Vendidas", int(ventas['cantidad'].sum()))
+
+        st.subheader("Historial Completo de Ventas")
+        
+        for _, row in ventas.iterrows():
+            col1, col2, col3, col4, col5 = st.columns([2, 2.5, 1.8, 1, 1])
+            with col1:
+                st.write(f"**{row['fecha'].strftime('%d/%m %H:%M')}**")
+            with col2:
+                st.write(f"{row['usuario']} → **{row['producto']}**")
+            with col3:
+                st.write(f"{row['cantidad']} uds - ${row['total']:,.0f}")
+            with col4:
+                if st.button("✏️ Modificar", key=f"mod_{row['id']}"):
+                    st.session_state["edit_venta_id"] = row["id"]
+                    st.rerun()
+            with col5:
+                if st.button("🗑️ Eliminar", key=f"del_{row['id']}"):
+                    st.session_state["confirm_delete_venta"] = row["id"]
+                    st.rerun()
+            st.divider()
+    else:
+        st.info("No hay ventas registradas en el rango seleccionado.")
+
+    # Modificar Venta
+    if "edit_venta_id" in st.session_state:
+        vid = st.session_state["edit_venta_id"]
+        venta = pd.read_sql(f"SELECT * FROM ventas WHERE id = {vid}", engine).iloc[0]
+        st.subheader(f"Modificar Venta #{vid}")
+        nueva_cant = st.number_input("Nueva Cantidad", min_value=1, value=int(venta["cantidad"]))
+        if st.button("💾 Guardar Cambio", type="primary"):
+            diff = nueva_cant - venta["cantidad"]
+            new_total = (venta["total"] / venta["cantidad"]) * nueva_cant
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE ventas SET cantidad=:c, total=:t, ganancia=:t*0.3 WHERE id=:id"),
+                           {"c": nueva_cant, "t": new_total, "id": vid})
+                conn.execute(text("UPDATE productos SET stock = stock - :d WHERE id = :pid"),
+                           {"d": diff, "pid": venta["producto_id"]})
+            del st.session_state["edit_venta_id"]
+            st.success("Venta modificada correctamente")
+            st.rerun()
+
+    # Eliminar Venta
+    if "confirm_delete_venta" in st.session_state:
+        vid = st.session_state["confirm_delete_venta"]
+        st.warning("¿Estás seguro de eliminar esta venta? El stock será devuelto automáticamente.")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Sí, Eliminar", type="primary"):
+                with engine.begin() as conn:
+                    v = conn.execute(text("SELECT producto_id, cantidad FROM ventas WHERE id = :id"), 
+                                   {"id": vid}).fetchone()
+                    if v:
+                        conn.execute(text("UPDATE productos SET stock = stock + :q WHERE id = :pid"),
+                                   {"q": v[1], "pid": v[0]})
+                        conn.execute(text("DELETE FROM ventas WHERE id = :id"), {"id": vid})
+                st.success("Venta eliminada y stock devuelto")
+                del st.session_state["confirm_delete_venta"]
+                st.rerun()
+        with col2:
+            if st.button("Cancelar"):
+                del st.session_state["confirm_delete_venta"]
+                st.rerun()
 
 else:
     st.info("Selecciona un módulo desde la barra lateral.")
