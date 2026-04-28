@@ -4,13 +4,8 @@ from datetime import datetime
 import hashlib
 from sqlalchemy import create_engine, text
 
-engine = create_engine(
-    st.secrets["DB_URL"],
-    pool_pre_ping=True
-)
-
 # =========================
-# 🔐 FUNCIONES
+# 🔐 SEGURIDAD
 # =========================
 def hash_pass(p):
     return hashlib.sha256(p.encode()).hexdigest()
@@ -20,13 +15,87 @@ def hash_pass(p):
 # =========================
 st.set_page_config(layout="wide")
 
-# =========================
-# DB
-# =========================
-engine = create_engine(st.secrets["DB_URL"], pool_pre_ping=True)
+st.markdown("""
+<style>
+body {background-color: #0e1117; color: white;}
+.stButton>button {
+    height: 60px;
+    font-size: 16px;
+    border-radius: 10px;
+    background-color: #1f6feb;
+    color: white;
+    font-weight: bold;
+}
+.card {
+    padding: 12px;
+    border-radius: 12px;
+    background-color: #161b22;
+    margin-bottom: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # =========================
-# LOGIN
+# 🧠 CONEXIÓN SUPABASE
+# =========================
+engine = create_engine(
+    st.secrets["DB_URL"],
+    pool_pre_ping=True,
+    connect_args={"sslmode": "require"}
+)
+
+# =========================
+# 🧱 CREAR TABLAS (AUTO)
+# =========================
+with engine.begin() as conn:
+
+    conn.execute(text("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE,
+        password TEXT,
+        rol TEXT
+    )
+    """))
+
+    conn.execute(text("""
+    CREATE TABLE IF NOT EXISTS productos (
+        id SERIAL PRIMARY KEY,
+        categoria TEXT,
+        nombre TEXT,
+        variante TEXT,
+        precio FLOAT,
+        costo FLOAT,
+        stock INT
+    )
+    """))
+
+    conn.execute(text("""
+    CREATE TABLE IF NOT EXISTS ventas (
+        id SERIAL PRIMARY KEY,
+        producto_id INT,
+        usuario TEXT,
+        cantidad INT,
+        total FLOAT,
+        ganancia FLOAT,
+        fecha TIMESTAMP
+    )
+    """))
+
+# =========================
+# 👑 ADMIN DEFAULT
+# =========================
+with engine.begin() as conn:
+    admin = conn.execute(text("SELECT * FROM usuarios WHERE username='admin'")).fetchone()
+
+    if not admin:
+        conn.execute(text("""
+        INSERT INTO usuarios (username,password,rol)
+        VALUES ('admin', :p, 'admin')
+        """), {"p": hash_pass("1234")})
+
+# =========================
+# 🔐 LOGIN
 # =========================
 st.title("📱 Sistema de Ventas PRO")
 
@@ -34,134 +103,124 @@ user = st.text_input("Usuario")
 pwd = st.text_input("Clave", type="password")
 
 if st.button("Entrar"):
+
     with engine.connect() as conn:
         data = conn.execute(text("""
-        SELECT * FROM usuarios
-        WHERE username = :u AND password = :p
-        """), {"u": user, "p": hash_pass(pwd)}).fetchone()
+            SELECT * FROM usuarios
+            WHERE username=:u AND password=:p
+        """), {
+            "u": user,
+            "p": hash_pass(pwd)
+        }).fetchone()
 
     if data:
         st.session_state["login"] = True
-        st.session_state["rol"] = data[3]
         st.session_state["user"] = data[1]
+        st.session_state["rol"] = data[3]
         st.rerun()
     else:
-        st.error("Datos incorrectos")
+        st.error("❌ Usuario o clave incorrectos")
 
 if "login" not in st.session_state:
     st.stop()
 
-st.write(f"👤 {st.session_state['user']} | {st.session_state['rol']}")
-
-if st.button("TEST DB"):
-    try:
-        with engine.connect() as conn:
-            st.success(conn.execute(text("SELECT 1")).fetchone())
-    except Exception as e:
-        st.error(e)
+st.success(f"👤 {st.session_state['user']} ({st.session_state['rol']})")
 
 # =========================
-# PRODUCTOS
+# 📦 PRODUCTOS
 # =========================
 df = pd.read_sql("SELECT * FROM productos", engine)
 
-if df.empty:
-    st.warning("⚠️ No hay productos")
-
-# =========================
-# BUSCADOR
-# =========================
 busqueda = st.text_input("🔍 Buscar")
 
 if busqueda:
     df = df[df["nombre"].str.contains(busqueda, case=False)]
 
-# =========================
-# VENTA
-# =========================
-st.header("⚡ Venta rápida")
+st.header("⚡ Venta")
 
-for categoria in df["categoria"].unique():
-    st.subheader(categoria)
+if not df.empty:
 
-    df_cat = df[df["categoria"] == categoria]
+    for cat in df["categoria"].unique():
+        st.subheader(cat)
+        df_cat = df[df["categoria"] == cat]
 
-    for nombre in df_cat["nombre"].unique():
-        st.markdown(f"### {nombre}")
+        for _, row in df_cat.iterrows():
 
-        productos = df_cat[df_cat["nombre"] == nombre]
+            col1, col2 = st.columns([3, 1])
 
-        cols = st.columns(2)
+            with col1:
+                st.markdown(f"""
+                <div class="card">
+                <b>{row['nombre']} - {row['variante']}</b><br>
+                💲 {row['precio']} | Stock: {row['stock']}
+                </div>
+                """, unsafe_allow_html=True)
 
-        for i, (_, row) in enumerate(productos.iterrows()):
-            col = cols[i % 2]
+            with col2:
+                cant = st.number_input("Cant", 1, 100, key=f"c{row['id']}")
 
-            with col:
-                st.write(f"{row['variante']} - ${row['precio']}")
-                st.write(f"Stock: {row['stock']}")
+                if st.button("Vender", key=f"v{row['id']}"):
 
-                cantidad = st.number_input(
-                    "Cantidad", min_value=1, value=1,
-                    key=f"c_{row['id']}"
-                )
+                    if row["stock"] >= cant:
 
-                if st.button("Vender", key=f"v_{row['id']}"):
-
-                    if row["stock"] >= cantidad:
-
-                        total = row["precio"] * cantidad
-                        ganancia = (row["precio"] - row["costo"]) * cantidad
+                        total = row["precio"] * cant
+                        ganancia = (row["precio"] - row["costo"]) * cant
 
                         with engine.begin() as conn:
                             conn.execute(text("""
-                            UPDATE productos SET stock = stock - :cant WHERE id = :id
-                            """), {"cant": cantidad, "id": row["id"]})
+                                UPDATE productos
+                                SET stock = stock - :c
+                                WHERE id = :id
+                            """), {"c": cant, "id": row["id"]})
 
                             conn.execute(text("""
-                            INSERT INTO ventas (producto_id,usuario,cantidad,total,ganancia,fecha)
-                            VALUES (:p,:u,:c,:t,:g,:f)
+                                INSERT INTO ventas
+                                (producto_id,usuario,cantidad,total,ganancia,fecha)
+                                VALUES (:p,:u,:c,:t,:g,:f)
                             """), {
                                 "p": row["id"],
                                 "u": st.session_state["user"],
-                                "c": cantidad,
+                                "c": cant,
                                 "t": total,
                                 "g": ganancia,
                                 "f": datetime.now()
                             })
 
-                        st.success("Venta realizada")
+                        st.success("✅ Venta realizada")
                         st.rerun()
+
                     else:
-                        st.error("Stock insuficiente")
+                        st.error("❌ Sin stock")
 
 # =========================
-# ADMIN
+# 🔐 ADMIN PANEL
 # =========================
 if st.session_state["rol"] == "admin":
 
     st.divider()
     st.header("🔐 Admin")
 
-    # CREAR USUARIO
-    st.subheader("👤 Usuario")
+    # 👤 USUARIOS
+    st.subheader("Crear usuario")
 
-    new_user = st.text_input("Usuario nuevo")
-    new_pass = st.text_input("Clave", type="password")
-    new_rol = st.selectbox("Rol", ["admin", "vendedor"])
+    u1, u2, u3 = st.columns(3)
+    new_user = u1.text_input("Usuario", key="u")
+    new_pass = u2.text_input("Clave", type="password", key="p")
+    new_rol = u3.selectbox("Rol", ["admin", "vendedor"], key="r")
 
-    if st.button("Crear usuario"):
+    if st.button("Crear"):
 
         with engine.begin() as conn:
             existe = conn.execute(text("""
-            SELECT * FROM usuarios WHERE username=:u
+                SELECT * FROM usuarios WHERE username=:u
             """), {"u": new_user}).fetchone()
 
             if existe:
                 st.error("Ya existe")
             else:
                 conn.execute(text("""
-                INSERT INTO usuarios (username,password,rol)
-                VALUES (:u,:p,:r)
+                    INSERT INTO usuarios (username,password,rol)
+                    VALUES (:u,:p,:r)
                 """), {
                     "u": new_user,
                     "p": hash_pass(new_pass),
@@ -171,40 +230,20 @@ if st.session_state["rol"] == "admin":
                 st.success("Usuario creado")
                 st.rerun()
 
-    # PRODUCTO
-    st.subheader("📦 Producto")
-
-    categoria = st.text_input("Categoría")
-    nombre = st.text_input("Nombre")
-    variante = st.text_input("Variante")
-    precio = st.number_input("Precio")
-    costo = st.number_input("Costo")
-    stock = st.number_input("Stock")
-
-    if st.button("Guardar producto"):
-        with engine.begin() as conn:
-            conn.execute(text("""
-            INSERT INTO productos (categoria,nombre,variante,precio,costo,stock)
-            VALUES (:c,:n,:v,:p,:co,:s)
-            """), {
-                "c": categoria,
-                "n": nombre,
-                "v": variante,
-                "p": precio,
-                "co": costo,
-                "s": stock
-            })
-
-        st.success("Producto agregado")
-        st.rerun()
-
-    # DASHBOARD
+    # 📊 DASHBOARD
     st.subheader("📊 Dashboard")
 
     ventas = pd.read_sql("SELECT * FROM ventas", engine)
 
     if not ventas.empty:
-        st.metric("Total", ventas["total"].sum())
 
-        ranking = ventas.groupby("usuario")["total"].sum()
-        st.bar_chart(ranking)
+        ventas["fecha"] = pd.to_datetime(ventas["fecha"])
+
+        st.metric("💰 Total", ventas["total"].sum())
+        st.metric("📈 Ganancia", ventas["ganancia"].sum())
+
+        st.subheader("Ranking")
+        st.bar_chart(ventas.groupby("usuario")["total"].sum())
+
+    else:
+        st.info("Sin ventas")
