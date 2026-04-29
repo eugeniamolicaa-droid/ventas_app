@@ -129,7 +129,6 @@ def reset_pagos():
 
 def marcar_fin_dia_descargado():
     st.session_state["fin_dia_pdf_descargado"] = True
-    st.session_state["mostrar_post_pdf"] = True
 
 
 def auto_collapse_sidebar():
@@ -1220,7 +1219,6 @@ elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes de Ventas")
 
     if st.button("🔄 Recargar Reportes", key="recargar_reportes"):
-        st.session_state["mostrar_post_pdf"] = False
         st.rerun()
 
     try:
@@ -1267,7 +1265,6 @@ elif menu == "📊 Reportes" and ROL == "admin":
             if st.session_state.get("fin_dia_fecha") != hoy_key:
                 st.session_state["fin_dia_fecha"] = hoy_key
                 st.session_state["fin_dia_pdf_descargado"] = False
-                st.session_state["mostrar_post_pdf"] = False
 
             cobros_hoy = cobros[
                 pd.to_datetime(cobros["fecha"]).dt.date == hoy
@@ -1276,7 +1273,6 @@ elif menu == "📊 Reportes" and ROL == "admin":
             if cobros_hoy.empty:
                 st.info("Todavía no hay ventas hoy")
                 st.session_state["fin_dia_pdf_descargado"] = False
-                st.session_state["mostrar_post_pdf"] = False
             else:
                 total_dia = cobros_hoy["total"].sum()
                 efectivo_dia = cobros_hoy["efectivo"].sum()
@@ -1336,7 +1332,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
 
                 pdf_buffer = crear_pdf_fin_dia(resumen_fin_dia, cobros_hoy)
 
-                col_pdf, col_volver, col_nuevo_dia = st.columns(3)
+                col_pdf, col_nuevo_dia = st.columns(2)
 
                 with col_pdf:
                     st.download_button(
@@ -1350,63 +1346,61 @@ elif menu == "📊 Reportes" and ROL == "admin":
                         key=f"descargar_fin_dia_{hoy_key}"
                     )
 
-                with col_volver:
-                    if st.session_state.get("mostrar_post_pdf", False):
-                        if st.button("⬅️ Volver a Reportes", use_container_width=True, key="volver_reportes_post_pdf"):
-                            st.session_state["mostrar_post_pdf"] = False
-                            st.rerun()
-                    else:
-                        st.button(
-                            "⬅️ Volver a Reportes",
-                            use_container_width=True,
-                            disabled=True,
-                            key="volver_reportes_disabled"
-                        )
-                        st.caption("Disponible luego de descargar PDF")
-
                 with col_nuevo_dia:
-                    nuevo_dia_habilitado = st.session_state.get("fin_dia_pdf_descargado", False)
+                    st.markdown("### 🌅 Nuevo día")
 
-                    if not nuevo_dia_habilitado:
-                        st.button(
-                            "🌅 NUEVO DÍA",
-                            use_container_width=True,
-                            disabled=True,
-                            key="nuevo_dia_bloqueado"
-                        )
-                        st.caption("Primero descargá el PDF de FIN DEL DÍA")
+                    password_nuevo_dia = st.text_input(
+                        "Clave admin para iniciar nuevo día",
+                        type="password",
+                        key=f"password_nuevo_dia_{hoy_key}"
+                    )
 
-                    else:
-                        if st.button(
-                            "🌅 NUEVO DÍA",
-                            type="primary",
-                            use_container_width=True,
-                            key="nuevo_dia_confirmado"
-                        ):
-                            grupos_hoy = cobros_hoy["venta_grupo"].dropna().tolist()
+                    if st.button(
+                        "🌅 NUEVO DÍA",
+                        type="primary",
+                        use_container_width=True,
+                        key="nuevo_dia_confirmado"
+                    ):
+                        if not password_nuevo_dia:
+                            st.error("❌ Ingresá la clave del admin")
 
-                            with engine.begin() as conn:
-                                for grupo in grupos_hoy:
-                                    conn.execute(text("""
-                                        DELETE FROM ventas
-                                        WHERE venta_grupo = :vg
-                                    """), {"vg": grupo})
+                        else:
+                            with engine.connect() as conn:
+                                admin_ok = conn.execute(text("""
+                                    SELECT 1
+                                    FROM usuarios
+                                    WHERE username = :u
+                                    AND password = :p
+                                    AND rol = 'admin'
+                                """), {
+                                    "u": USER,
+                                    "p": hash_pass(password_nuevo_dia)
+                                }).fetchone()
 
-                                    conn.execute(text("""
-                                        DELETE FROM cobros
-                                        WHERE venta_grupo = :vg
-                                    """), {"vg": grupo})
+                            if not admin_ok:
+                                st.error("❌ Clave admin incorrecta")
 
-                            st.session_state["fin_dia_pdf_descargado"] = False
-                            st.session_state["mostrar_post_pdf"] = False
-                            st.session_state["cart"] = []
-                            reset_pagos()
+                            else:
+                                grupos_hoy = cobros_hoy["venta_grupo"].dropna().tolist()
 
-                            st.success("✅ Nuevo día iniciado. Ventas y cobros del día fueron limpiados sin devolver stock.")
-                            st.rerun()
+                                with engine.begin() as conn:
+                                    for grupo in grupos_hoy:
+                                        conn.execute(text("""
+                                            DELETE FROM ventas
+                                            WHERE venta_grupo = :vg
+                                        """), {"vg": grupo})
 
-            if st.session_state.get("mostrar_post_pdf", False):
-                st.success("✅ PDF generado/descargado. Podés volver a Reportes o iniciar NUEVO DÍA.")
+                                        conn.execute(text("""
+                                            DELETE FROM cobros
+                                            WHERE venta_grupo = :vg
+                                        """), {"vg": grupo})
+
+                                st.session_state["fin_dia_pdf_descargado"] = False
+                                st.session_state["cart"] = []
+                                reset_pagos()
+
+                                st.success("✅ Nuevo día iniciado. Ventas y cobros del día fueron limpiados sin devolver stock.")
+                                st.rerun()
 
             st.divider()
             st.subheader("🧾 Ventas realizadas")
