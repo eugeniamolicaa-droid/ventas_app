@@ -124,8 +124,7 @@ def require_admin():
 
 
 def reset_pagos():
-    st.session_state["input_pago_efectivo"] = 0.0
-    st.session_state["input_pago_transferencia"] = 0.0
+    st.session_state["pago_key_version"] = st.session_state.get("pago_key_version", 0) + 1
 
 
 def marcar_fin_dia_descargado():
@@ -437,11 +436,8 @@ if "cart" not in st.session_state:
 if "descuento_tipo" not in st.session_state:
     st.session_state["descuento_tipo"] = None
 
-if "input_pago_efectivo" not in st.session_state:
-    st.session_state["input_pago_efectivo"] = 0.0
-
-if "input_pago_transferencia" not in st.session_state:
-    st.session_state["input_pago_transferencia"] = 0.0
+if "pago_key_version" not in st.session_state:
+    st.session_state["pago_key_version"] = 0
 
 
 # =========================
@@ -638,16 +634,10 @@ elif menu == "🛍️ Carrito":
 
         st.markdown("### 💳 Forma de pago")
 
-        efectivo_actual = float(st.session_state.get("input_pago_efectivo", 0.0))
-        transferencia_actual = float(st.session_state.get("input_pago_transferencia", 0.0))
+        pago_key_version = st.session_state.get("pago_key_version", 0)
 
-        if efectivo_actual > total:
-            efectivo_actual = total
-
-        restante_inicial = max(0.0, total - efectivo_actual)
-
-        if transferencia_actual > restante_inicial:
-            transferencia_actual = restante_inicial
+        efectivo_key = f"input_pago_efectivo_{pago_key_version}"
+        transferencia_key = f"input_pago_transferencia_{pago_key_version}"
 
         colp1, colp2 = st.columns(2)
 
@@ -655,27 +645,20 @@ elif menu == "🛍️ Carrito":
             pago_efectivo = st.number_input(
                 "💵 Efectivo",
                 min_value=0.0,
-                max_value=float(total),
-                value=float(efectivo_actual),
+                value=0.0,
                 step=100.0,
-                key="input_pago_efectivo"
+                key=efectivo_key
             )
 
         restante_para_transferencia = max(0.0, total - float(pago_efectivo))
-
-        transferencia_value = min(
-            float(st.session_state.get("input_pago_transferencia", 0.0)),
-            float(restante_para_transferencia)
-        )
 
         with colp2:
             pago_transferencia = st.number_input(
                 "🏦 Transferencia",
                 min_value=0.0,
-                max_value=float(restante_para_transferencia),
-                value=float(transferencia_value),
+                value=0.0,
                 step=100.0,
-                key="input_pago_transferencia"
+                key=transferencia_key
             )
 
         comprobante_transferencia = None
@@ -684,19 +667,28 @@ elif menu == "🛍️ Carrito":
             comprobante_transferencia = st.file_uploader(
                 "📸 Comprobante de transferencia",
                 type=["jpg", "jpeg", "png"],
-                key="comprobante_transferencia"
+                key=f"comprobante_transferencia_{pago_key_version}"
             )
 
         total_pagado = float(pago_efectivo) + float(pago_transferencia)
         diferencia = total_pagado - total
 
+        st.write(f"**Total final:** ${total:,.0f}")
         st.write(f"**Pagado:** ${total_pagado:,.0f}")
-        st.write(f"**Restante permitido:** ${max(0.0, total - total_pagado):,.0f}")
+        st.write(f"**Máximo permitido en transferencia:** ${restante_para_transferencia:,.0f}")
 
-        if diferencia < 0:
+        if pago_efectivo > total:
+            st.error("❌ El efectivo no puede superar el total final")
+
+        elif pago_transferencia > restante_para_transferencia:
+            st.error("❌ La transferencia no puede superar lo que falta pagar")
+
+        elif diferencia < 0:
             st.warning(f"Faltan pagar: ${abs(diferencia):,.0f}")
+
         elif diferencia > 0:
             st.error(f"El pago supera el total por: ${diferencia:,.0f}")
+
         else:
             st.success("Pago exacto ✅")
 
@@ -712,7 +704,13 @@ elif menu == "🛍️ Carrito":
         with colb2:
             if st.button("💳 Cobrar Venta", type="primary", use_container_width=True, key="cobrar_venta"):
 
-                if total_pagado < total:
+                if pago_efectivo > total:
+                    st.error("❌ El efectivo no puede superar el total final")
+
+                elif pago_transferencia > restante_para_transferencia:
+                    st.error("❌ La transferencia no puede superar lo que falta pagar")
+
+                elif total_pagado < total:
                     st.error("❌ El pago no alcanza para cubrir el total")
 
                 elif total_pagado > total:
