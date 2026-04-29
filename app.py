@@ -136,27 +136,27 @@ st.markdown("""
     .product-card-pro {
         background: radial-gradient(circle at top left, rgba(255,255,255,0.14), rgba(255,255,255,0.055));
         border: 1px solid rgba(255,255,255,0.11);
-        border-radius: 24px;
-        padding: 16px;
-        margin-bottom: 16px;
-        box-shadow: 0 18px 45px rgba(0,0,0,0.26);
-        min-height: 245px;
+        border-radius: 20px;
+        padding: 12px;
+        margin-bottom: 14px;
+        box-shadow: 0 12px 32px rgba(0,0,0,0.22);
+        min-height: 210px;
     }
 
     .product-img-wrap {
-        height: 170px;
+        height: 115px;
         background: rgba(255,255,255,0.045);
-        border-radius: 18px;
+        border-radius: 16px;
         display: flex;
         align-items: center;
         justify-content: center;
         color: #71717a;
-        margin-bottom: 12px;
+        margin-bottom: 10px;
         overflow: hidden;
     }
 
     .product-name-pro {
-        font-size: 18px;
+        font-size: 16px;
         font-weight: 800;
         letter-spacing: -0.02em;
         line-height: 1.1;
@@ -165,13 +165,13 @@ st.markdown("""
 
     .product-variant-pro {
         color: #a1a1aa;
-        font-size: 13px;
-        margin-bottom: 8px;
+        font-size: 12px;
+        margin-bottom: 6px;
     }
 
     .product-price-pro {
         color: #30d158;
-        font-size: 24px;
+        font-size: 21px;
         font-weight: 900;
         margin-bottom: 4px;
     }
@@ -221,7 +221,7 @@ st.markdown("""
         }
 
         .product-img-wrap {
-            height: 140px;
+            height: 105px;
         }
     }
 </style>
@@ -279,7 +279,6 @@ def stock_badge(stock: int) -> str:
 
 def render_pos_header(df_productos, cart):
     productos_total = len(df_productos)
-    stock_total = int(df_productos["stock"].fillna(0).sum()) if not df_productos.empty else 0
     items_carrito = sum(item["qty"] for item in cart)
 
     st.markdown("""
@@ -289,7 +288,7 @@ def render_pos_header(df_productos, cart):
     </div>
     """, unsafe_allow_html=True)
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2 = st.columns(2)
 
     with m1:
         st.markdown(f"""
@@ -300,14 +299,6 @@ def render_pos_header(df_productos, cart):
         """, unsafe_allow_html=True)
 
     with m2:
-        st.markdown(f"""
-        <div class="metric-pill">
-            <div class="label">Stock total</div>
-            <div class="value">{stock_total}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with m3:
         st.markdown(f"""
         <div class="metric-pill">
             <div class="label">En carrito</div>
@@ -745,10 +736,10 @@ if menu == "🛒 Agregar Producto":
     else:
         st.caption(f"Mostrando {len(df_filtrado)} producto(s)")
 
-        cols = st.columns(3)
+        cols = st.columns(4)
 
         for idx, row in df_filtrado.reset_index(drop=True).iterrows():
-            with cols[idx % 3]:
+            with cols[idx % 4]:
                 stock = int(row["stock"] or 0)
                 precio = float(row["precio"] or 0)
                 variante = row.get("variante") or ""
@@ -758,7 +749,7 @@ if menu == "🛒 Agregar Producto":
 
                 if row.get("imagen") and isinstance(row.get("imagen"), str) and len(row.get("imagen")) > 20:
                     try:
-                        st.image(base64.b64decode(row.get("imagen")), use_container_width=True)
+                        st.image(base64.b64decode(row.get("imagen")), width=130)
                     except Exception:
                         st.markdown(
                             '<div class="product-img-wrap">Foto inválida</div>',
