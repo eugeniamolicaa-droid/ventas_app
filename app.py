@@ -42,23 +42,6 @@ st.markdown("""
         margin-bottom: 14px;
     }
 
-    .product-title {
-        font-size: 20px;
-        font-weight: 700;
-        margin-bottom: 4px;
-    }
-
-    .muted {
-        color: #8e8e93;
-        font-size: 14px;
-    }
-
-    .price {
-        color: #34c759;
-        font-size: 24px;
-        font-weight: 700;
-    }
-
     h1, h2, h3 {
         font-weight: 700;
         letter-spacing: -0.02em;
@@ -155,6 +138,27 @@ st.markdown("""
         overflow: hidden;
     }
 
+    .no-photo-card {
+        height: 115px;
+        border-radius: 16px;
+        background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.025));
+        border: 1px dashed rgba(255,255,255,0.16);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #8e8e93;
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
+
+    .no-photo-icon {
+        font-size: 22px;
+        display: block;
+        text-align: center;
+        margin-bottom: 4px;
+    }
+
     .product-name-pro {
         font-size: 16px;
         font-weight: 800;
@@ -220,7 +224,8 @@ st.markdown("""
             min-height: auto;
         }
 
-        .product-img-wrap {
+        .product-img-wrap,
+        .no-photo-card {
             height: 105px;
         }
     }
@@ -229,7 +234,7 @@ st.markdown("""
 
 
 # =========================
-# FUNCIONES
+# FUNCIONES GENERALES
 # =========================
 def hash_pass(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -253,19 +258,23 @@ def show_image_from_base64(img_base64, width=220):
         try:
             st.image(base64.b64decode(img_base64), width=width)
         except Exception:
-            st.markdown(
-                '<div style="height:180px;background:rgba(255,255,255,0.05);'
-                'border-radius:14px;display:flex;align-items:center;justify-content:center;'
-                'color:#777;">Foto inválida</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown("""
+            <div class="no-photo-card">
+                <div>
+                    <span class="no-photo-icon">📷</span>
+                    Foto no disponible
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
     else:
-        st.markdown(
-            '<div style="height:180px;background:rgba(255,255,255,0.05);'
-            'border-radius:14px;display:flex;align-items:center;justify-content:center;'
-            'color:#777;">Sin foto</div>',
-            unsafe_allow_html=True
-        )
+        st.markdown("""
+        <div class="no-photo-card">
+            <div>
+                <span class="no-photo-icon">📦</span>
+                Sin foto
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 def stock_badge(stock: int) -> str:
@@ -333,6 +342,10 @@ def reset_pagos():
 
 def marcar_fin_dia_descargado():
     st.session_state["fin_dia_pdf_descargado"] = True
+
+
+def refrescar_cache():
+    st.cache_data.clear()
 
 
 def auto_collapse_sidebar():
@@ -570,6 +583,45 @@ with engine.begin() as conn:
 
 
 # =========================
+# CACHE DE DATA
+# =========================
+@st.cache_data(ttl=20)
+def cargar_productos():
+    return pd.read_sql(
+        "SELECT * FROM productos ORDER BY nombre, variante",
+        engine
+    )
+
+
+@st.cache_data(ttl=20)
+def cargar_usuarios():
+    return pd.read_sql(
+        "SELECT id, username, rol FROM usuarios ORDER BY username",
+        engine
+    )
+
+
+@st.cache_data(ttl=10)
+def cargar_cobros():
+    return pd.read_sql("""
+        SELECT
+            id,
+            venta_grupo,
+            fecha,
+            usuario,
+            subtotal,
+            descuento_tipo,
+            descuento_monto,
+            total,
+            efectivo,
+            transferencia,
+            comprobante
+        FROM cobros
+        ORDER BY fecha DESC
+    """, engine)
+
+
+# =========================
 # ADMIN DEFAULT
 # =========================
 with engine.begin() as conn:
@@ -582,6 +634,7 @@ with engine.begin() as conn:
             INSERT INTO usuarios(username, password, rol)
             VALUES('admin', :p, 'admin')
         """), {"p": hash_pass("1234")})
+        refrescar_cache()
 
 
 # =========================
@@ -622,7 +675,6 @@ if "login" not in st.session_state:
                     st.session_state["descuento_tipo"] = None
 
                 reset_pagos()
-
                 st.rerun()
             else:
                 st.error("❌ Credenciales incorrectas")
@@ -670,12 +722,9 @@ auto_collapse_sidebar()
 
 
 # =========================
-# DATA
+# DATA PRINCIPAL
 # =========================
-df_productos = pd.read_sql(
-    "SELECT * FROM productos ORDER BY nombre, variante",
-    engine
-)
+df_productos = cargar_productos()
 
 
 # =========================
@@ -729,12 +778,15 @@ if menu == "🛒 Agregar Producto":
             | df_filtrado["categoria"].fillna("").str.contains(search, case=False, na=False)
         ]
 
+    total_resultados = len(df_filtrado)
+    df_filtrado = df_filtrado.head(80)
+
     st.write("")
 
     if df_filtrado.empty:
         st.warning("No se encontraron productos con ese filtro")
     else:
-        st.caption(f"Mostrando {len(df_filtrado)} producto(s)")
+        st.caption(f"Mostrando {len(df_filtrado)} de {total_resultados} producto(s)")
 
         cols = st.columns(4)
 
@@ -751,15 +803,23 @@ if menu == "🛒 Agregar Producto":
                     try:
                         st.image(base64.b64decode(row.get("imagen")), width=130)
                     except Exception:
-                        st.markdown(
-                            '<div class="product-img-wrap">Foto inválida</div>',
-                            unsafe_allow_html=True
-                        )
+                        st.markdown("""
+                        <div class="no-photo-card">
+                            <div>
+                                <span class="no-photo-icon">📷</span>
+                                Foto no disponible
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                 else:
-                    st.markdown(
-                        '<div class="product-img-wrap">Sin foto</div>',
-                        unsafe_allow_html=True
-                    )
+                    st.markdown("""
+                    <div class="no-photo-card">
+                        <div>
+                            <span class="no-photo-icon">📦</span>
+                            Sin foto
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 st.markdown(f"""
                     <div class="product-name-pro">{row['nombre']}</div>
@@ -1079,6 +1139,7 @@ elif menu == "🛍️ Carrito":
                         st.session_state["cart"] = []
                         st.session_state["descuento_tipo"] = None
                         reset_pagos()
+                        refrescar_cache()
                         st.success("✅ Venta completada exitosamente")
                         st.rerun()
 
@@ -1103,38 +1164,13 @@ elif menu == "⚙️ Admin" and ROL == "admin":
             col1, col2 = st.columns(2)
 
             with col1:
-                categoria = st.text_input(
-                    "Categoría",
-                    placeholder="Ej: Fundas",
-                    key="nueva_categoria"
-                )
-
-                nombre = st.text_input(
-                    "Producto / Modelo *",
-                    placeholder="Ej: iPhone 17",
-                    key="nuevo_nombre"
-                )
-
-                precio = st.number_input(
-                    "Precio de Venta ($)",
-                    min_value=0.0,
-                    step=100.0,
-                    key="nuevo_precio"
-                )
+                categoria = st.text_input("Categoría", placeholder="Ej: Fundas", key="nueva_categoria")
+                nombre = st.text_input("Producto / Modelo *", placeholder="Ej: iPhone 17", key="nuevo_nombre")
+                precio = st.number_input("Precio de Venta ($)", min_value=0.0, step=100.0, key="nuevo_precio")
 
             with col2:
-                costo = st.number_input(
-                    "Costo ($)",
-                    min_value=0.0,
-                    step=100.0,
-                    key="nuevo_costo"
-                )
-
-                imagen = st.file_uploader(
-                    "📸 Foto del producto",
-                    type=["jpg", "jpeg", "png"],
-                    key="nueva_imagen"
-                )
+                costo = st.number_input("Costo ($)", min_value=0.0, step=100.0, key="nuevo_costo")
+                imagen = st.file_uploader("📸 Foto del producto", type=["jpg", "jpeg", "png"], key="nueva_imagen")
 
             st.markdown("### 🎨 Variantes / Colores")
             st.info("Escribí una variante por línea con este formato: color, stock")
@@ -1146,10 +1182,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 key="variantes_texto"
             )
 
-            submit_producto = st.form_submit_button(
-                "Guardar Producto con Variantes",
-                type="primary"
-            )
+            submit_producto = st.form_submit_button("Guardar Producto con Variantes", type="primary")
 
             if submit_producto:
                 if not nombre or precio <= 0 or not variantes_texto.strip():
@@ -1208,15 +1241,13 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                             f"✅ Producto '{nombre}' agregado con {len(variantes)} variantes. "
                             f"Stock total: {stock_total}"
                         )
+                        refrescar_cache()
                         st.rerun()
 
         st.divider()
         st.subheader("Productos Registrados")
 
-        df_productos_admin = pd.read_sql(
-            "SELECT * FROM productos ORDER BY categoria, nombre, variante",
-            engine
-        )
+        df_productos_admin = cargar_productos()
 
         if df_productos_admin.empty:
             st.info("No hay productos registrados")
@@ -1276,6 +1307,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                                 {"id": int(row["id"])}
                             )
                         st.success("Variante eliminada")
+                        refrescar_cache()
                         st.rerun()
 
         if "edit_product_id" in st.session_state:
@@ -1290,6 +1322,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
             if prod_df.empty:
                 st.error("Producto no encontrado")
                 del st.session_state["edit_product_id"]
+                refrescar_cache()
                 st.rerun()
 
             prod = prod_df.iloc[0]
@@ -1311,13 +1344,9 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                     e_stock = st.number_input("Stock", value=int(prod["stock"] or 0), step=1, key="edit_stock")
 
                 st.write("Foto actual:")
-                show_image_from_base64(prod.get("imagen"), width=280)
+                show_image_from_base64(prod.get("imagen"), width=180)
 
-                nueva_imagen = st.file_uploader(
-                    "Cambiar foto",
-                    type=["jpg", "jpeg", "png"],
-                    key="edit_imagen"
-                )
+                nueva_imagen = st.file_uploader("Cambiar foto", type=["jpg", "jpeg", "png"], key="edit_imagen")
 
                 col_save, col_cancel = st.columns(2)
 
@@ -1361,15 +1390,13 @@ elif menu == "⚙️ Admin" and ROL == "admin":
 
                     del st.session_state["edit_product_id"]
                     st.success("Producto actualizado")
+                    refrescar_cache()
                     st.rerun()
 
     with tab2:
         st.subheader("Usuarios del Sistema")
 
-        df_usuarios = pd.read_sql(
-            "SELECT id, username, rol FROM usuarios ORDER BY username",
-            engine
-        )
+        df_usuarios = cargar_usuarios()
 
         st.dataframe(df_usuarios, use_container_width=True, hide_index=True)
 
@@ -1401,6 +1428,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                         })
 
                     st.success(f"✅ Usuario '{new_user}' creado correctamente")
+                    refrescar_cache()
                     st.rerun()
 
                 except Exception:
@@ -1420,17 +1448,8 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                 key="select_usuario_password"
             )
 
-            nueva_password = st.text_input(
-                "Nueva contraseña",
-                type="password",
-                key="nueva_password_usuario"
-            )
-
-            confirmar_password = st.text_input(
-                "Confirmar contraseña",
-                type="password",
-                key="confirmar_password_usuario"
-            )
+            nueva_password = st.text_input("Nueva contraseña", type="password", key="nueva_password_usuario")
+            confirmar_password = st.text_input("Confirmar contraseña", type="password", key="confirmar_password_usuario")
 
             if st.button("Actualizar contraseña", type="primary", key="btn_actualizar_password"):
                 if not nueva_password or not confirmar_password:
@@ -1451,6 +1470,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                         })
 
                     st.success(f"✅ Contraseña de '{usuario_password}' actualizada correctamente")
+                    refrescar_cache()
                     st.rerun()
 
         st.divider()
@@ -1475,6 +1495,7 @@ elif menu == "⚙️ Admin" and ROL == "admin":
                     """), {"u": usuario_a_eliminar})
 
                 st.success(f"✅ Usuario '{usuario_a_eliminar}' eliminado")
+                refrescar_cache()
                 st.rerun()
 
 
@@ -1487,25 +1508,11 @@ elif menu == "📊 Reportes" and ROL == "admin":
     st.header("📊 Reportes de Ventas")
 
     if st.button("🔄 Recargar Reportes", key="recargar_reportes"):
+        refrescar_cache()
         st.rerun()
 
     try:
-        cobros = pd.read_sql("""
-            SELECT
-                id,
-                venta_grupo,
-                fecha,
-                usuario,
-                subtotal,
-                descuento_tipo,
-                descuento_monto,
-                total,
-                efectivo,
-                transferencia,
-                comprobante
-            FROM cobros
-            ORDER BY fecha DESC
-        """, engine)
+        cobros = cargar_cobros()
 
         if cobros.empty:
             st.warning("No hay ventas registradas todavía")
@@ -1666,6 +1673,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                                 st.session_state["fin_dia_pdf_descargado"] = False
                                 st.session_state["cart"] = []
                                 reset_pagos()
+                                refrescar_cache()
 
                                 st.success("✅ Nuevo día iniciado. Ventas y cobros del día fueron limpiados sin devolver stock.")
                                 st.rerun()
@@ -1797,6 +1805,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                                 """), {"vg": venta_grupo})
 
                             st.success("✅ Venta anulada y stock devuelto")
+                            refrescar_cache()
                             st.rerun()
 
                     with col_accion2:
@@ -1816,6 +1825,7 @@ elif menu == "📊 Reportes" and ROL == "admin":
                                 """), {"vg": venta_grupo})
 
                             st.success("✅ Venta eliminada sin modificar stock")
+                            refrescar_cache()
                             st.rerun()
 
             st.divider()
