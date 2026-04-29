@@ -73,6 +73,157 @@ st.markdown("""
     img {
         border-radius: 14px;
     }
+
+    /* =========================
+       POS / VENTAS UI
+    ========================= */
+
+    .pos-hero {
+        background: linear-gradient(135deg, rgba(0,122,255,0.22), rgba(52,199,89,0.12));
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 28px;
+        padding: 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+    }
+
+    .pos-title {
+        font-size: 34px;
+        font-weight: 800;
+        letter-spacing: -0.04em;
+        margin-bottom: 4px;
+    }
+
+    .pos-subtitle {
+        color: #a1a1aa;
+        font-size: 15px;
+    }
+
+    .metric-pill {
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 18px;
+        padding: 14px 16px;
+        text-align: center;
+    }
+
+    .metric-pill .label {
+        color: #8e8e93;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+
+    .metric-pill .value {
+        color: #f5f5f7;
+        font-size: 22px;
+        font-weight: 800;
+        margin-top: 4px;
+    }
+
+    .category-chip {
+        display: inline-block;
+        padding: 8px 14px;
+        margin: 4px 6px 10px 0;
+        background: rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.10);
+        border-radius: 999px;
+        color: #f5f5f7;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .product-card-pro {
+        background: radial-gradient(circle at top left, rgba(255,255,255,0.14), rgba(255,255,255,0.055));
+        border: 1px solid rgba(255,255,255,0.11);
+        border-radius: 24px;
+        padding: 16px;
+        margin-bottom: 16px;
+        box-shadow: 0 18px 45px rgba(0,0,0,0.26);
+        min-height: 245px;
+    }
+
+    .product-img-wrap {
+        height: 170px;
+        background: rgba(255,255,255,0.045);
+        border-radius: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #71717a;
+        margin-bottom: 12px;
+        overflow: hidden;
+    }
+
+    .product-name-pro {
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+        margin-bottom: 4px;
+    }
+
+    .product-variant-pro {
+        color: #a1a1aa;
+        font-size: 13px;
+        margin-bottom: 8px;
+    }
+
+    .product-price-pro {
+        color: #30d158;
+        font-size: 24px;
+        font-weight: 900;
+        margin-bottom: 4px;
+    }
+
+    .stock-ok {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(48,209,88,0.16);
+        color: #30d158;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .stock-low {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(255,214,10,0.16);
+        color: #ffd60a;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .stock-out {
+        display: inline-block;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: rgba(255,69,58,0.16);
+        color: #ff453a;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    @media (max-width: 768px) {
+        .pos-title {
+            font-size: 27px;
+        }
+
+        .pos-hero {
+            padding: 18px;
+            border-radius: 22px;
+        }
+
+        .product-card-pro {
+            min-height: auto;
+        }
+
+        .product-img-wrap {
+            height: 140px;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -115,6 +266,68 @@ def show_image_from_base64(img_base64, width=220):
             'color:#777;">Sin foto</div>',
             unsafe_allow_html=True
         )
+
+
+def stock_badge(stock: int) -> str:
+    if stock <= 0:
+        return '<span class="stock-out">Sin stock</span>'
+    elif stock <= 3:
+        return f'<span class="stock-low">Stock bajo: {stock}</span>'
+    else:
+        return f'<span class="stock-ok">Stock: {stock}</span>'
+
+
+def render_pos_header(df_productos, cart):
+    productos_total = len(df_productos)
+    stock_total = int(df_productos["stock"].fillna(0).sum()) if not df_productos.empty else 0
+    items_carrito = sum(item["qty"] for item in cart)
+
+    st.markdown("""
+    <div class="pos-hero">
+        <div class="pos-title">Punto de venta</div>
+        <div class="pos-subtitle">Buscá, elegí variante y agregá productos al carrito en segundos.</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    m1, m2, m3 = st.columns(3)
+
+    with m1:
+        st.markdown(f"""
+        <div class="metric-pill">
+            <div class="label">Productos</div>
+            <div class="value">{productos_total}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with m2:
+        st.markdown(f"""
+        <div class="metric-pill">
+            <div class="label">Stock total</div>
+            <div class="value">{stock_total}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with m3:
+        st.markdown(f"""
+        <div class="metric-pill">
+            <div class="label">En carrito</div>
+            <div class="value">{items_carrito}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def render_category_chips(df_productos):
+    categorias = (
+        df_productos["categoria"]
+        .fillna("Sin categoría")
+        .replace("", "Sin categoría")
+        .drop_duplicates()
+        .tolist()
+    )
+
+    if categorias:
+        chips = "".join([f'<span class="category-chip">{cat}</span>' for cat in categorias[:12]])
+        st.markdown(chips, unsafe_allow_html=True)
 
 
 def require_admin():
@@ -478,43 +691,100 @@ df_productos = pd.read_sql(
 # 🛒 AGREGAR PRODUCTO AL CARRITO
 # =========================
 if menu == "🛒 Agregar Producto":
-    st.header("🛒 Agregar Producto")
+    cart = st.session_state.get("cart", [])
 
-    search = st.text_input("🔎 Buscar producto", "", key="buscar_producto")
+    render_pos_header(df_productos, cart)
+
+    st.divider()
+
+    col_search, col_filter = st.columns([2.2, 1])
+
+    with col_search:
+        search = st.text_input(
+            "Buscar producto",
+            "",
+            placeholder="Buscar por producto, color, modelo o categoría...",
+            key="buscar_producto"
+        )
+
+    with col_filter:
+        categorias_disponibles = (
+            df_productos["categoria"]
+            .fillna("Sin categoría")
+            .replace("", "Sin categoría")
+            .drop_duplicates()
+            .tolist()
+        )
+
+        categoria_seleccionada = st.selectbox(
+            "Categoría",
+            ["Todas"] + categorias_disponibles,
+            key="filtro_categoria_ventas"
+        )
+
+    render_category_chips(df_productos)
+
+    df_filtrado = df_productos.copy()
+
+    if categoria_seleccionada != "Todas":
+        df_filtrado = df_filtrado[
+            df_filtrado["categoria"].fillna("Sin categoría").replace("", "Sin categoría") == categoria_seleccionada
+        ]
 
     if search:
-        df_filtrado = df_productos[
-            df_productos["nombre"].str.contains(search, case=False, na=False)
-            | df_productos["variante"].fillna("").str.contains(search, case=False, na=False)
-            | df_productos["categoria"].fillna("").str.contains(search, case=False, na=False)
+        df_filtrado = df_filtrado[
+            df_filtrado["nombre"].str.contains(search, case=False, na=False)
+            | df_filtrado["variante"].fillna("").str.contains(search, case=False, na=False)
+            | df_filtrado["categoria"].fillna("").str.contains(search, case=False, na=False)
         ]
-    else:
-        df_filtrado = df_productos
+
+    st.write("")
 
     if df_filtrado.empty:
-        st.warning("No se encontraron productos")
+        st.warning("No se encontraron productos con ese filtro")
     else:
+        st.caption(f"Mostrando {len(df_filtrado)} producto(s)")
+
         cols = st.columns(3)
 
         for idx, row in df_filtrado.reset_index(drop=True).iterrows():
             with cols[idx % 3]:
-                show_image_from_base64(row.get("imagen"), width=220)
-
                 stock = int(row["stock"] or 0)
                 precio = float(row["precio"] or 0)
+                variante = row.get("variante") or ""
+                categoria = row.get("categoria") or "Sin categoría"
+
+                st.markdown('<div class="product-card-pro">', unsafe_allow_html=True)
+
+                if row.get("imagen") and isinstance(row.get("imagen"), str) and len(row.get("imagen")) > 20:
+                    try:
+                        st.image(base64.b64decode(row.get("imagen")), use_container_width=True)
+                    except Exception:
+                        st.markdown(
+                            '<div class="product-img-wrap">Foto inválida</div>',
+                            unsafe_allow_html=True
+                        )
+                else:
+                    st.markdown(
+                        '<div class="product-img-wrap">Sin foto</div>',
+                        unsafe_allow_html=True
+                    )
 
                 st.markdown(f"""
-                <div class="card">
-                    <div class="product-title">{row['nombre']}</div>
-                    <div class="muted">{row.get('variante') or ''}</div>
-                    <div class="muted">{row.get('categoria') or ''}</div>
-                    <div class="price">${precio:,.0f}</div>
-                    <small>Stock: {stock}</small>
-                </div>
+                    <div class="product-name-pro">{row['nombre']}</div>
+                    <div class="product-variant-pro">{variante}</div>
+                    <div class="product-variant-pro">{categoria}</div>
+                    <div class="product-price-pro">${precio:,.0f}</div>
+                    {stock_badge(stock)}
                 """, unsafe_allow_html=True)
 
                 if stock <= 0:
-                    st.error("Sin stock")
+                    st.button(
+                        "Sin stock",
+                        disabled=True,
+                        use_container_width=True,
+                        key=f"sin_stock_{row['id']}"
+                    )
                 else:
                     qty = st.number_input(
                         "Cantidad",
@@ -525,11 +795,16 @@ if menu == "🛒 Agregar Producto":
                         key=f"qty_{row['id']}"
                     )
 
-                    if st.button("➕ Agregar al carrito", key=f"add_{row['id']}", use_container_width=True):
+                    if st.button(
+                        "➕ Agregar",
+                        key=f"add_{row['id']}",
+                        use_container_width=True,
+                        type="primary"
+                    ):
                         st.session_state["cart"].append({
                             "id": int(row["id"]),
                             "name": row["nombre"],
-                            "variant": row.get("variante") or "",
+                            "variant": variante,
                             "price": precio,
                             "cost": float(row.get("costo") or 0),
                             "qty": int(qty)
@@ -538,6 +813,8 @@ if menu == "🛒 Agregar Producto":
                         reset_pagos()
                         st.toast(f"✅ {row['nombre']} agregado", icon="🛒")
                         st.rerun()
+
+                st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================
