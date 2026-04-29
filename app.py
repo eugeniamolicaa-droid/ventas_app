@@ -124,8 +124,8 @@ def require_admin():
 
 
 def reset_pagos():
-    st.session_state["pago_efectivo"] = 0.0
-    st.session_state["pago_transferencia"] = 0.0
+    st.session_state["input_pago_efectivo"] = 0.0
+    st.session_state["input_pago_transferencia"] = 0.0
 
 
 def marcar_fin_dia_descargado():
@@ -203,9 +203,6 @@ def crear_pdf_fin_dia(resumen, ventas_detalle):
     y -= 0.6 * cm
     pdf.drawString(2 * cm, y, f"Cantidad de ventas: {resumen['cantidad_ventas']}")
 
-    # =========================
-    # RESUMEN POR USUARIO
-    # =========================
     y -= 1.2 * cm
     check_y()
 
@@ -248,9 +245,6 @@ def crear_pdf_fin_dia(resumen, ventas_detalle):
         pdf.drawString(13 * cm, y, f"${row['transferencia']:,.0f}")
         pdf.drawString(15.5 * cm, y, f"${row['descuentos']:,.0f}")
 
-    # =========================
-    # DETALLE POR USUARIO
-    # =========================
     y -= 1.2 * cm
     check_y()
 
@@ -443,11 +437,11 @@ if "cart" not in st.session_state:
 if "descuento_tipo" not in st.session_state:
     st.session_state["descuento_tipo"] = None
 
-if "pago_efectivo" not in st.session_state:
-    st.session_state["pago_efectivo"] = 0.0
+if "input_pago_efectivo" not in st.session_state:
+    st.session_state["input_pago_efectivo"] = 0.0
 
-if "pago_transferencia" not in st.session_state:
-    st.session_state["pago_transferencia"] = 0.0
+if "input_pago_transferencia" not in st.session_state:
+    st.session_state["input_pago_transferencia"] = 0.0
 
 
 # =========================
@@ -644,16 +638,16 @@ elif menu == "🛍️ Carrito":
 
         st.markdown("### 💳 Forma de pago")
 
-        st.session_state["pago_efectivo"] = float(st.session_state.get("pago_efectivo", 0.0))
-        st.session_state["pago_transferencia"] = float(st.session_state.get("pago_transferencia", 0.0))
+        efectivo_actual = float(st.session_state.get("input_pago_efectivo", 0.0))
+        transferencia_actual = float(st.session_state.get("input_pago_transferencia", 0.0))
 
-        if st.session_state["pago_efectivo"] > total:
-            st.session_state["pago_efectivo"] = total
+        if efectivo_actual > total:
+            efectivo_actual = total
 
-        restante_para_transferencia = max(0.0, total - st.session_state["pago_efectivo"])
+        restante_inicial = max(0.0, total - efectivo_actual)
 
-        if st.session_state["pago_transferencia"] > restante_para_transferencia:
-            st.session_state["pago_transferencia"] = restante_para_transferencia
+        if transferencia_actual > restante_inicial:
+            transferencia_actual = restante_inicial
 
         colp1, colp2 = st.columns(2)
 
@@ -662,24 +656,26 @@ elif menu == "🛍️ Carrito":
                 "💵 Efectivo",
                 min_value=0.0,
                 max_value=float(total),
-                value=float(st.session_state["pago_efectivo"]),
+                value=float(efectivo_actual),
                 step=100.0,
-                key="pago_efectivo"
+                key="input_pago_efectivo"
             )
 
         restante_para_transferencia = max(0.0, total - float(pago_efectivo))
 
-        if st.session_state["pago_transferencia"] > restante_para_transferencia:
-            st.session_state["pago_transferencia"] = restante_para_transferencia
+        transferencia_value = min(
+            float(st.session_state.get("input_pago_transferencia", 0.0)),
+            float(restante_para_transferencia)
+        )
 
         with colp2:
             pago_transferencia = st.number_input(
                 "🏦 Transferencia",
                 min_value=0.0,
                 max_value=float(restante_para_transferencia),
-                value=float(st.session_state["pago_transferencia"]),
+                value=float(transferencia_value),
                 step=100.0,
-                key="pago_transferencia"
+                key="input_pago_transferencia"
             )
 
         comprobante_transferencia = None
